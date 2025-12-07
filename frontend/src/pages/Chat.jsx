@@ -2,8 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useSocket } from '../contexts/SocketContext';
 import { motion, AnimatePresence } from 'framer-motion';
-import { IoSend, IoLogOutOutline, IoPerson } from 'react-icons/io5';
-import { BiUserCircle } from 'react-icons/bi';
+import { IoSend, IoLogOutOutline } from 'react-icons/io5';
 
 const Chat = () => {
   const { user, logout } = useAuth();

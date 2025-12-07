@@ -32,7 +32,7 @@ export function AuthProvider({ children }) {
     };
 
     validateSession();
-  }, []);
+  }, [logout]);
 
   const login = async (credentials) => {
     const response = await authApi.login(credentials);
