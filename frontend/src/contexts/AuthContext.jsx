@@ -24,7 +24,7 @@ export function AuthProvider({ children }) {
         
         if (userId && username) {
           const response = await authApi.checkSession(userId);
-          if (response.Response) {
+          if (response.Response === true) {
             setUser({ id: userId, username });
           } else {
             logout();
@@ -42,25 +42,61 @@ export function AuthProvider({ children }) {
   }, [logout]);
 
   const login = async (credentials) => {
-    const response = await authApi.login(credentials);
-    const { userID, username } = response.Response;
-    
-    localStorage.setItem('chat_user_id', userID);
-    localStorage.setItem('chat_username', username);
-    
-    setUser({ id: userID, username });
-    navigate('/chat');
+    try {
+      const response = await authApi.login(credentials);
+      console.log('Login API response:', JSON.stringify(response, null, 2));
+      
+      // Check all possible response formats
+      if (response && response.Response) {
+        const userID = response.Response.userID || response.Response.UserID;
+        const username = response.Response.username || response.Response.Username;
+        
+        if (userID && username) {
+          localStorage.setItem('chat_user_id', userID);
+          localStorage.setItem('chat_username', username);
+          
+          setUser({ id: userID, username });
+          navigate('/chat');
+          return; // SUCCESS - exit here
+        }
+      }
+      
+      // If we get here, response format is wrong
+      console.error('Unexpected response format:', response);
+      throw new Error('Login succeeded but response format is unexpected');
+    } catch (error) {
+      console.error('Login error:', error);
+      throw error;
+    }
   };
 
   const register = async (credentials) => {
-    const response = await authApi.register(credentials);
-    const { userID, username } = response.Response;
-    
-    localStorage.setItem('chat_user_id', userID);
-    localStorage.setItem('chat_username', username);
-    
-    setUser({ id: userID, username });
-    navigate('/chat');
+    try {
+      const response = await authApi.register(credentials);
+      console.log('Registration API response:', JSON.stringify(response, null, 2));
+      
+      // Check all possible response formats
+      if (response && response.Response) {
+        const userID = response.Response.userID || response.Response.UserID;
+        const username = response.Response.username || response.Response.Username;
+        
+        if (userID && username) {
+          localStorage.setItem('chat_user_id', userID);
+          localStorage.setItem('chat_username', username);
+          
+          setUser({ id: userID, username });
+          navigate('/chat');
+          return; // SUCCESS - exit here
+        }
+      }
+      
+      // If we get here, response format is wrong
+      console.error('Unexpected response format:', response);
+      throw new Error('Registration succeeded but response format is unexpected');
+    } catch (error) {
+      console.error('Registration error:', error);
+      throw error;
+    }
   };
 
   return (
