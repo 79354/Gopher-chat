@@ -24,7 +24,8 @@ export function AuthProvider({ children }) {
         
         if (userId && username) {
           const response = await authApi.checkSession(userId);
-          if (response.Response === true) {
+          // Check lowercase 'response' key
+          if (response.response === true) {
             setUser({ id: userId, username });
           } else {
             logout();
@@ -46,10 +47,10 @@ export function AuthProvider({ children }) {
       const response = await authApi.login(credentials);
       console.log('Login API response:', JSON.stringify(response, null, 2));
       
-      // Check all possible response formats
-      if (response && response.Response) {
-        const userID = response.Response.userID || response.Response.UserID;
-        const username = response.Response.username || response.Response.Username;
+      // Access lowercase 'response' key from backend
+      if (response && response.response) {
+        const userID = response.response.userID || response.response.UserID;
+        const username = response.response.username || response.response.Username;
         
         if (userID && username) {
           localStorage.setItem('chat_user_id', userID);
@@ -75,10 +76,10 @@ export function AuthProvider({ children }) {
       const response = await authApi.register(credentials);
       console.log('Registration API response:', JSON.stringify(response, null, 2));
       
-      // Check all possible response formats
-      if (response && response.Response) {
-        const userID = response.Response.userID || response.Response.UserID;
-        const username = response.Response.username || response.Response.Username;
+      // Access lowercase 'response' key from backend
+      if (response && response.response) {
+        const userID = response.response.userID || response.response.UserID;
+        const username = response.response.username || response.response.Username;
         
         if (userID && username) {
           localStorage.setItem('chat_user_id', userID);
