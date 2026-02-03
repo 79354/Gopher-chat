@@ -11,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// ... [RenderHome, IsUsernameAvailable, Login, Registration, UserSessionCheck, GetMessagesHandler STAY THE SAME] ...
+
 func RenderHome() gin.HandlerFunc{
 	return func(c *gin.Context){
 		c.JSON(http.StatusOK, APIResponse{
@@ -247,6 +249,97 @@ func GetMessagesHandler() gin.HandlerFunc{
 			Status:   http.StatusText(http.StatusOK),
 			Message:  constants.SuccessfulResponse,
 			Response: conversations,
+		})
+	}
+}
+
+// ---------------- NEW SOCIAL GRAPH HANDLERS ----------------
+
+func SendFriendRequestHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req FriendRequestPayload
+		fromUserID := c.Param("fromUserID")
+
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, APIResponse{
+				Code: http.StatusBadRequest, Message: "Invalid Request",
+			})
+			return
+		}
+
+		targetUser := GetUserByUsername(req.TargetUsername)
+		if targetUser == (UserDetails{}) {
+			c.JSON(http.StatusNotFound, APIResponse{
+				Code: http.StatusNotFound, Message: "User not found",
+			})
+			return
+		}
+
+		if err := CreateFriendRequest(fromUserID, targetUser.ID); err != nil {
+			c.JSON(http.StatusBadRequest, APIResponse{
+				Code: http.StatusBadRequest, Message: err.Error(),
+			})
+			return
+		}
+
+		// Trigger Notification via Redis
+		sender := GetUserByUserID(fromUserID)
+		SendNotification(targetUser.ID, sender.Username, "friend_request", sender.Username + " sent you a friend request")
+
+		c.JSON(http.StatusOK, APIResponse{
+			Code: http.StatusOK, Message: "Friend Request Sent",
+		})
+	}
+}
+
+func AcceptFriendRequestHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Requester ID (The person who sent the original request)
+		requesterID := c.Param("requesterID") 
+		// Addressee ID (The person accepting it - ME)
+		myUserID := c.Param("myUserID")
+
+		if err := AcceptFriendRequest(requesterID, myUserID); err != nil {
+			c.JSON(http.StatusBadRequest, APIResponse{
+				Code: http.StatusBadRequest, Message: "Could not accept request",
+			})
+			return
+		}
+
+		// Notify the requester that I accepted
+		me := GetUserByUserID(myUserID)
+		SendNotification(requesterID, me.Username, "friend_accept", me.Username + " accepted your friend request")
+
+		c.JSON(http.StatusOK, APIResponse{
+			Code: http.StatusOK, Message: "Friend Request Accepted",
+		})
+	}
+}
+
+func GetPendingRequestsHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := c.Param("userID")
+		requests, err := GetPendingRequests(userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: "Error fetching requests"})
+			return
+		}
+		c.JSON(http.StatusOK, APIResponse{
+			Code: http.StatusOK, Response: requests,
+		})
+	}
+}
+
+func GetFriendListHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := c.Param("userID")
+		friends, err := GetFriendList(userID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, APIResponse{Code: 500, Message: "Error fetching friends"})
+			return
+		}
+		c.JSON(http.StatusOK, APIResponse{
+			Code: http.StatusOK, Response: friends,
 		})
 	}
 }

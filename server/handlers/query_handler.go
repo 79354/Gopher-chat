@@ -15,6 +15,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// ... [Existing User/Message Functions: UpdateUserOnlineStatusByUserID, GetUserByUsername, etc. STAY THE SAME] ...
+
 func UpdateUserOnlineStatusByUserID(userId, status string) error{
 	docID, err := primitive.ObjectIDFromHex(userId)
 	if err != nil{
@@ -97,7 +99,6 @@ func LoginQueryHandler(userDetailsRequest LoginRequest) (UserResponse, error){
 	}
 }
 
-// check the username from the database
 func RegisterQueryHandler(userDetails RegistrationRequest) (string, error){
 	if userDetails.Username == ""{
 		return "", errors.New(constants.UsernameCantBeEmpty)
@@ -213,7 +214,7 @@ func GetConversationBetweenTwoUsers(toUser, fromUser string, page int64) []Messa
 	}
 
 	findOptions := options.Find()
-	findOptions.SetSort(bson.D{{"createdAt", -1}}) // -1 = descending, newest first
+	findOptions.SetSort(bson.D{{"createdAt", -1}})
 	findOptions.SetLimit(limit)
 	findOptions.SetSkip((page-1)*limit)
 
@@ -230,10 +231,125 @@ func GetConversationBetweenTwoUsers(toUser, fromUser string, page int64) []Messa
 		}
 	}
 
-	// Reverse to display oldest-to-newest in UI
 	for i, j := 0, len(conversation)-1; i < j; i, j = i+1, j-1 {
 		conversation[i], conversation[j] = conversation[j], conversation[i]
 	}
 
 	return conversation
+}
+
+// ---------------- NEW SOCIAL GRAPH FUNCTIONS ----------------
+
+func CreateFriendRequest(requesterID, addresseeID string) error {
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("friendships")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Check if friendship already exists (in either direction)
+	count, _ := collection.CountDocuments(ctx, bson.M{
+		"$or": []bson.M{
+			{"requesterID": requesterID, "addresseeID": addresseeID},
+			{"requesterID": addresseeID, "addresseeID": requesterID},
+		},
+	})
+
+	if count > 0 {
+		return errors.New("friendship request already exists or you are already friends")
+	}
+
+	_, err := collection.InsertOne(ctx, bson.M{
+		"requesterID": requesterID,
+		"addresseeID": addresseeID,
+		"status":      "pending",
+		"createdAt":   time.Now(),
+	})
+
+	return err
+}
+
+func AcceptFriendRequest(requesterID, addresseeID string) error {
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("friendships")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := collection.UpdateOne(ctx,
+		bson.M{
+			"requesterID": requesterID, 
+			"addresseeID": addresseeID,
+			"status": "pending",
+		},
+		bson.M{"$set": bson.M{"status": "accepted"}},
+	)
+	return err
+}
+
+func GetPendingRequests(userID string) ([]FriendRequestResponse, error) {
+	var requests []FriendRequestResponse
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("friendships")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Find requests where I am the addressee and status is pending
+	cursor, err := collection.Find(ctx, bson.M{
+		"addresseeID": userID,
+		"status":      "pending",
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	for cursor.Next(ctx) {
+		var friendship Friendship
+		if err := cursor.Decode(&friendship); err == nil {
+			requester := GetUserByUserID(friendship.RequesterID)
+			requests = append(requests, FriendRequestResponse{
+				ID:       friendship.RequesterID,
+				Username: requester.Username,
+				Status:   "pending",
+			})
+		}
+	}
+	return requests, nil
+}
+
+func GetFriendList(userID string) ([]UserResponse, error) {
+	var friends []UserResponse
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("friendships")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Find accepted friendships where I am either requester or addressee
+	cursor, err := collection.Find(ctx, bson.M{
+		"status": "accepted",
+		"$or": []bson.M{
+			{"requesterID": userID},
+			{"addresseeID": userID},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	for cursor.Next(ctx) {
+		var friendship Friendship
+		if err := cursor.Decode(&friendship); err == nil {
+			// Determine which ID is the friend's ID
+			var friendID string
+			if friendship.RequesterID == userID {
+				friendID = friendship.AddresseeID
+			} else {
+				friendID = friendship.RequesterID
+			}
+
+			friendDetails := GetUserByUserID(friendID)
+			friends = append(friends, UserResponse{
+				UserID:   friendDetails.ID,
+				Username: friendDetails.Username,
+				Online:   friendDetails.Online,
+			})
+		}
+	}
+	return friends, nil
 }

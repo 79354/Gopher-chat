@@ -95,5 +95,17 @@ func setupRoutes(router *gin.Engine) {
         {
             messages.GET("/conversation/:toUserID/:fromUserID", handlers.GetMessagesHandler())
         }
+
+        friends := api.Group("/friends")
+		{
+			// POST JSON: { "targetUsername": "john" }
+			friends.POST("/request/:fromUserID", handlers.SendFriendRequestHandler())
+			// Accept a specific requester
+			friends.POST("/accept/:requesterID/:myUserID", handlers.AcceptFriendRequestHandler())
+			// Get Pending Requests
+			friends.GET("/requests/:userID", handlers.GetPendingRequestsHandler())
+			// Get Friends List
+			friends.GET("/list/:userID", handlers.GetFriendListHandler())
+		}
     }
 }
