@@ -1,15 +1,16 @@
 package handlers
 
 import (
+	"encoding/json"
 	"github.com/gorilla/websocket"
 	"time"
 )
 
 type UserDetails struct {
-	ID       string `bson:"_id,omitempty"`
-	Username string `json:"username" binding:"required" bson:"username"`
-	Password string `json:"-" bson:"password"`
-	Online   string `json:"online" bson:"online"`
+	ID        string    `bson:"_id,omitempty"`
+	Username  string    `json:"username" binding:"required" bson:"username"`
+	Password  string    `json:"-" bson:"password"`
+	Online    string    `json:"online" bson:"online"`
 	SocketID  string    `json:"socketId,omitempty" bson:"socketId,omitempty"`
 	CreatedAt time.Time `json:"createdAt,omitempty" bson:"createdAt,omitempty"`
 }
@@ -22,33 +23,34 @@ type Message struct {
 	CreatedAt  time.Time `json:"createdAt,omitempty" bson:"createdAt,omitempty"`
 }
 
-// Registration data and login credentials
 type LoginRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
 }
+
 type RegistrationRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
 }
 
-// user data returned to clients
 type UserResponse struct {
 	Username string `json:"username"`
 	UserID   string `json:"userID"`
 	Online   string `json:"online"`
 }
 
-type SocketEvent struct {
-	EventName	 string		 `json:"eventname"`
-	EventPayload interface{} `json:"eventpayload"`
+// WSMessage is the standardized websocket message format
+type WSMessage struct {
+	Type     string          `json:"type"`
+	Payload  json.RawMessage `json:"payload"`
+	TargetID string          `json:"targetID,omitempty"` // Added for Redis Routing
 }
 
 type Client struct {
-	Lobby   *Lobby
-	Conn    *websocket.Conn
-	Send    chan SocketEvent
-	UserID  string
+	Lobby  *Lobby
+	Conn   *websocket.Conn
+	Send   chan WSMessage
+	UserID string
 }
 
 type MessagePayload struct {
@@ -57,9 +59,9 @@ type MessagePayload struct {
 	Message    string `json:"message" binding:"required"`
 }
 
-type APIResponse struct{
-	Code 	 int          `json:"code"`
-	Status   string       `json:"status"`
-	Message  string       `json:"message"`
-	Response interface{}  `json:"response"`
+type APIResponse struct {
+	Code     int         `json:"code"`
+	Status   string      `json:"status"`
+	Message  string      `json:"message"`
+	Response interface{} `json:"response"`
 }

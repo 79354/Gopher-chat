@@ -1,21 +1,21 @@
 package handlers
 
 import (
-	"net/http"
-	"bytes"
-	"encoding/json"
-	"log"
-	"time"
+    "bytes"
+    "encoding/json"
+    "log"
+    "net/http"
+    "time"
 
-	"github.com/gorilla/websocket"
+    "github.com/gorilla/websocket"
 )
 
 // pingPeriod < pongWait, 6-second buffer in case a pong is a bit delayed.
 const (
-	writeWait = 10 *time.Second		// prevents server hang, conn doesnt wait forever to send
-	pongWait = 60 *time.Second		// keeps the server waiting too long, if client disconnects
-	pingPeriod = (pongWait*9)/ 10   // sends regular pings to check if client is active
-	maxMessageSize = 512			// prevents memory abuse
+    writeWait      = 10 * time.Second     // prevents server hang, conn doesnt wait forever to send
+    pongWait       = 60 * time.Second     // keeps the server waiting too long, if client disconnects
+    pingPeriod     = (pongWait * 9) / 10  // sends regular pings to check if client is active
+    maxMessageSize = 512                  // prevents memory abuse
 )
 
 // Upgrader specifies parameters for upgrading an HTTP connection to a WebSocket connection
@@ -29,261 +29,289 @@ var Upgrader = websocket.Upgrader{
     },
 }
 
-func HandleSocketPayloadEvents(client *Client, socketEventPayload SocketEvent){
-	type chatListResponse struct{
-		Type 	 string 	 `json:"type"`
-		Chatlist interface{} `json:"chatlist"`
-	}
-
-	switch socketEventPayload.EventName {
-	case "join":
-		userID := (socketEventPayload.EventPayload).(string)
-		userDetails := GetUserByUserID(userID)
-
-		if userDetails == (UserDetails{}){
-			log.Println("An invalid user with userID " + userID + " tried to connect to Chat Server.")
-		} else{
-			if userDetails.Online == "N"{
-				log.Println(userID + " tried to connect to Chat Server.")
-			}else{
-				// Announce in the chatlist arrival of new client
-				newUserOnlinePayload := SocketEvent{
-					EventName: "chatlist-response",
-					EventPayload: chatListResponse{
-						Type: "new-user-joined",
-						Chatlist: UserResponse{
-							Username: userDetails.Username,
-							UserID: userDetails.ID,
-							Online: userDetails.Online,
-						},
-					},
-				}
-
-				BroadcastToEveryoneExceptme(client.Lobby, newUserOnlinePayload, userID)
-
-				// For the client to see everyone that's online
-				allOnlineUsersPayload := SocketEvent{
-					EventName: "chatlist-response",
-					EventPayload: chatListResponse{
-						Type: "my-chatlist",
-						Chatlist: GetAllOnlineUsers(userDetails.ID),
-					},
-				}
-
-				EmitToClient(client.Lobby, allOnlineUsersPayload, userDetails.ID)
-			}
-		}
-	case "disconnect":
-		if socketEventPayload.EventPayload != nil{
-			userID := (socketEventPayload.EventPayload).(string)
-			userDetails := GetUserByUserID(userID)
-			UpdateUserOnlineStatusByUserID(userID, "N")
-
-			BroadcastToEveryone(client.Lobby, SocketEvent{
-				EventName: "chatlist-response",
-				EventPayload: chatListResponse{
-					Type: "user-disconnected",
-					Chatlist: UserResponse{
-						Online: "N",
-						UserID: userDetails.ID,
-						Username: userDetails.Username,
-					},
-				},
-			})
-		}
-	case "message":
-		//decoding JSON into Go types using the encoding/json package without a struct, Go uses this:
-		//  map[string]interface{}
-
-		message	   := (socketEventPayload.EventPayload.(map[string]interface{})["message"]).(string)
-		toUserID   := (socketEventPayload.EventPayload.(map[string]interface{})["toUserID"]).(string)
-		fromUserID := (socketEventPayload.EventPayload.(map[string]interface{})["fromUserID"]).(string)
-
-		if message != "" && fromUserID != "" && toUserID != "" {
-			messagePacket := MessagePayload{
-				FromUserID: fromUserID,
-				Message: message,
-				ToUserID: toUserID,
-			}
-			StoreNewMessages(messagePacket)
-			payload := SocketEvent{
-				EventName: "message-response",
-				EventPayload: messagePacket,
-			}
-
-			EmitToClient(client.Lobby, payload, toUserID)
-		}
-	}
+// Helper function to easily create WSMessage with correct JSON payload
+// Updated to include targetID for Redis routing
+func createWSMessage(msgType string, data interface{}, targetID string) WSMessage {
+    payloadBytes, _ := json.Marshal(data)
+    return WSMessage{
+        Type:     msgType,
+        Payload:  payloadBytes,
+        TargetID: targetID,
+    }
 }
 
-func setSocketPayloadReadConfig(c *Client){
-	c.Conn.SetReadLimit(maxMessageSize)
-	c.Conn.SetReadDeadline(time.Now().Add(pongWait))	// deadline for pong reponse
-	c.Conn.SetPongHandler(func (string) error { c.Conn.SetReadDeadline(time.Now().Add(pongWait)); return nil }) // extends the pong deadline
+func HandleSocketPayloadEvents(client *Client, msg WSMessage) {
+    type chatListResponse struct {
+        Type     string      `json:"type"`
+        Chatlist interface{} `json:"chatlist"`
+    }
+
+    switch msg.Type {
+    case "join":
+        var userID string
+        // Unmarshal the RawMessage into a string
+        if err := json.Unmarshal(msg.Payload, &userID); err != nil {
+            log.Printf("Error unmarshaling join payload: %v", err)
+            return
+        }
+
+        userDetails := GetUserByUserID(userID)
+
+        if userDetails == (UserDetails{}) {
+            log.Println("An invalid user with userID " + userID + " tried to connect to Chat Server.")
+        } else {
+            if userDetails.Online == "N" {
+                log.Println(userID + " tried to connect to Chat Server.")
+            } else {
+                // Announce in the chatlist arrival of new client
+                // CHANGED: Use PublishMessage (Redis) instead of local broadcast
+                newUserOnlinePayload := createWSMessage("chatlist-response", chatListResponse{
+                    Type: "new-user-joined",
+                    Chatlist: UserResponse{
+                        Username: userDetails.Username,
+                        UserID:   userDetails.ID,
+                        Online:   userDetails.Online,
+                    },
+                }, "") // Empty TargetID broadcasts to all
+
+                // Replaced BroadcastToEveryoneExceptme with PublishMessage
+                PublishMessage(newUserOnlinePayload)
+
+                // For the client to see everyone that's online (Keep this local direct send)
+                allOnlineUsersPayload := createWSMessage("chatlist-response", chatListResponse{
+                    Type:     "my-chatlist",
+                    Chatlist: GetAllOnlineUsers(userDetails.ID),
+                }, userDetails.ID)
+
+                EmitToClient(client.Lobby, allOnlineUsersPayload, userDetails.ID)
+            }
+        }
+    case "disconnect":
+        // Check if payload exists
+        if len(msg.Payload) > 0 {
+            var userID string
+            if err := json.Unmarshal(msg.Payload, &userID); err == nil {
+                userDetails := GetUserByUserID(userID)
+                UpdateUserOnlineStatusByUserID(userID, "N")
+
+                // CHANGED: Use PublishMessage (Redis)
+                disconnectMsg := createWSMessage("chatlist-response", chatListResponse{
+                    Type: "user-disconnected",
+                    Chatlist: UserResponse{
+                        Online:   "N",
+                        UserID:   userDetails.ID,
+                        Username: userDetails.Username,
+                    },
+                }, "")
+
+                PublishMessage(disconnectMsg)
+            }
+        }
+    case "message":
+        // Unmarshal directly into a map or struct.
+        // Using a map to match original logic, but safely.
+        var payloadData map[string]string
+        if err := json.Unmarshal(msg.Payload, &payloadData); err != nil {
+            log.Printf("Error unmarshaling message payload: %v", err)
+            return
+        }
+
+        message := payloadData["message"]
+        toUserID := payloadData["toUserID"]
+        fromUserID := payloadData["fromUserID"]
+        
+        // Get sender info for notification
+        fromUser := GetUserByUserID(fromUserID)
+
+        if message != "" && fromUserID != "" && toUserID != "" {
+            messagePacket := MessagePayload{
+                FromUserID: fromUserID,
+                Message:    message,
+                ToUserID:   toUserID,
+            }
+            StoreNewMessages(messagePacket)
+            
+            // 1. Send Chat Message via Redis (Targeted)
+            responsePayload := createWSMessage("message-response", messagePacket, toUserID)
+            PublishMessage(responsePayload)
+            
+            // 2. Send Notification via Redis (New Feature)
+            SendNotification(toUserID, fromUser.Username, "new_message", "New message from " + fromUser.Username)
+        }
+    }
+}
+
+func setSocketPayloadReadConfig(c *Client) {
+    c.Conn.SetReadLimit(maxMessageSize)
+    c.Conn.SetReadDeadline(time.Now().Add(pongWait)) // deadline for pong reponse
+    c.Conn.SetPongHandler(func(string) error { c.Conn.SetReadDeadline(time.Now().Add(pongWait)); return nil }) // extends the pong deadline
 }
 
 // client stays in the lobby, but client side Conn is closed
-func unRegisterAndCloseConn(c *Client){
-	c.Lobby.unregister <- c
-	c.Conn.Close()
+func unRegisterAndCloseConn(c *Client) {
+    c.Lobby.unregister <- c
+    c.Conn.Close()
 }
 
-func (c *Client) readPump(){
-	var socketEvenPayload SocketEvent
+func (c *Client) readPump() {
+    var msg WSMessage
 
-	defer unRegisterAndCloseConn(c)
+    defer unRegisterAndCloseConn(c)
 
-	setSocketPayloadReadConfig(c)
+    setSocketPayloadReadConfig(c)
 
-	for {
-		_, payload, err := c.Conn.ReadMessage()
+    for {
+        _, payload, err := c.Conn.ReadMessage()
 
-		decoder := json.NewDecoder(bytes.NewReader(payload))
-		decoderErr := decoder.Decode(&socketEvenPayload)
+        if err != nil {
+            if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+                log.Printf("error ===: %v", err)
+            }
+            break
+        }
 
-		if decoderErr != nil{
-			log.Printf("error: %v", decoderErr)
-			break
-		}
+        decoder := json.NewDecoder(bytes.NewReader(payload))
+        decoderErr := decoder.Decode(&msg)
 
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error ===: %v", err)
-			}
-			break
-		}
+        if decoderErr != nil {
+            log.Printf("error: %v", decoderErr)
+            break
+        }
 
-		HandleSocketPayloadEvents(c, socketEvenPayload)
-	}
+        HandleSocketPayloadEvents(c, msg)
+    }
 }
 
 // sends mssg, from: server to client
 // batches the messages
 // sends periodic ping
 // cleans up gracefully on errors or disconnects
-func (c *Client) writePump(){
-	// starts a ticker to trigger pings every pingPeriod(54 seconds)
-	ticker := time.NewTicker(pingPeriod)
-	defer func(){
-		ticker.Stop()
-		c.Conn.Close()
-	}()
+func (c *Client) writePump() {
+    // starts a ticker to trigger pings every pingPeriod(54 seconds)
+    ticker := time.NewTicker(pingPeriod)
+    defer func() {
+        ticker.Stop()
+        c.Conn.Close()
+    }()
 
-	for {
-		select {
-		case payload, ok := <- c.Send:
+    for {
+        select {
+        case payload, ok := <-c.Send:
 
-			// struct Buffer implements the interface io.Writer{Write(p []byte) (n int, err error)}
-			reqBodyBytes := new(bytes.Buffer)
-			json.NewEncoder(reqBodyBytes).Encode(payload)
-			finalPayload := reqBodyBytes.Bytes()	// returns the unread portion of Buffer
+            c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+            if !ok {
+                c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+                return
+            }
 
-			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok{
-				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
+            w, err := c.Conn.NextWriter(websocket.TextMessage)
+            if err != nil {
+                return
+            }
 
-			w, err := c.Conn.NextWriter(websocket.TextMessage)
-			if err != nil{
-				return
-			}
+            // Encode the WSMessage struct to JSON
+            json.NewEncoder(w).Encode(payload)
 
-			w.Write(finalPayload)
+            // Add queued messages to the current websocket frame
+            n := len(c.Send)
+            for i := 0; i < n; i++ {
+                json.NewEncoder(w).Encode(<-c.Send)
+            }
 
-			n := len(c.Send)
-			for i:= 0; i < n; i++{
-				json.NewEncoder(reqBodyBytes).Encode(<-c.Send)
-				w.Write(reqBodyBytes.Bytes())
-			}
+            if err := w.Close(); err != nil {
+                return
+            }
 
-			if err := w.Close(); err != nil{
-				return
-			}
-
-		// This sends a ping message every pingPeriod to check if the client is still connected.
-		case <-ticker.C:
-			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil{
-				return
-			}
-		}
-	}
+        // This sends a ping message every pingPeriod to check if the client is still connected.
+        case <-ticker.C:
+            c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+            if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+                return
+            }
+        }
+    }
 }
 
-func CreateClient(lobby *Lobby, connection *websocket.Conn, userID string){
-	client := &Client{
-		Lobby: lobby,
-		Conn: connection,
-		Send: make(chan SocketEvent),
-		UserID: userID,
-	}
+func CreateClient(lobby *Lobby, connection *websocket.Conn, userID string) {
+    client := &Client{
+        Lobby:  lobby,
+        Conn:   connection,
+        Send:   make(chan WSMessage),
+        UserID: userID,
+    }
 
-	go client.writePump() // uses ping, mssg: server 
-	go client.readPump() // uses pong
+    go client.writePump() // uses ping, mssg: server
+    go client.readPump()  // uses pong
 
-	client.Lobby.register <- client
+    client.Lobby.register <- client
 }
 
 // Join for new Socket Users
-func HandleUserRegisterEvent(lobby *Lobby, client *Client){
-	lobby.clients[client] = true
-	HandleSocketPayloadEvents(client, SocketEvent{
-		EventName: "join",
-		EventPayload: client.UserID,
-	})
+func HandleUserRegisterEvent(lobby *Lobby, client *Client) {
+    lobby.clients[client] = true
+    
+    // Create payload manually for the internal event
+    payloadBytes, _ := json.Marshal(client.UserID)
+    
+    HandleSocketPayloadEvents(client, WSMessage{
+        Type:    "join",
+        Payload: payloadBytes,
+    })
 }
 
 // Disconnect for Socket Users
-func HandleUserDisconnectEvent(lobby *Lobby, client *Client){
-	_, ok := lobby.clients[client]
-	if ok{
-		// remove client from lobby and close the communication channel
-		delete(lobby.clients, client)
-		close(client.Send)
+func HandleUserDisconnectEvent(lobby *Lobby, client *Client) {
+    _, ok := lobby.clients[client]
+    if ok {
+        // remove client from lobby and close the communication channel
+        delete(lobby.clients, client)
+        close(client.Send)
 
-		// close the websocket connection
-		HandleSocketPayloadEvents(client, SocketEvent{
-			EventName: "disconnect",
-			EventPayload: client.UserID,
-		})
-	}
+        // Create payload manually
+        payloadBytes, _ := json.Marshal(client.UserID)
+
+        // close the websocket connection
+        HandleSocketPayloadEvents(client, WSMessage{
+            Type:    "disconnect",
+            Payload: payloadBytes,
+        })
+    }
 }
 
-func EmitToClient(lobby *Lobby, payload SocketEvent, userID string){
-
-	for client := range lobby.clients{
-		if client.UserID == userID{
-			select {
-			case client.Send <- payload:
-			default:
-				close(client.Send)
-				delete(lobby.clients, client)
-			}
-		}
-	}
+// Helper functions (Preserved for Redis Adapter usage)
+func EmitToClient(lobby *Lobby, payload WSMessage, userID string) {
+    for client := range lobby.clients {
+        if client.UserID == userID {
+            select {
+            case client.Send <- payload:
+            default:
+                close(client.Send)
+                delete(lobby.clients, client)
+            }
+        }
+    }
 }
 
-func BroadcastToEveryone(lobby *Lobby, payload SocketEvent){
-	for client := range lobby.clients{
-		select{
-		case client.Send <- payload:
-		default:
-			close(client.Send)
-			delete(lobby.clients, client)
-		}
-	}
+func BroadcastToEveryone(lobby *Lobby, payload WSMessage) {
+    for client := range lobby.clients {
+        select {
+        case client.Send <- payload:
+        default:
+            close(client.Send)
+            delete(lobby.clients, client)
+        }
+    }
 }
 
-func BroadcastToEveryoneExceptme(lobby *Lobby, payload SocketEvent, myUserID string){
-	for client := range lobby.clients{
-		if client.UserID != myUserID{
-			select {
-			case client.Send <- payload:
-			default:
-				close(client.Send)
-				delete(lobby.clients, client)
-			}
-		}
-	}
+func BroadcastToEveryoneExceptme(lobby *Lobby, payload WSMessage, myUserID string) {
+    for client := range lobby.clients {
+        if client.UserID != myUserID {
+            select {
+            case client.Send <- payload:
+            default:
+                close(client.Send)
+                delete(lobby.clients, client)
+            }
+        }
+    }
 }

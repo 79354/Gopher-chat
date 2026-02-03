@@ -1,0 +1,7 @@
+# Ignore
+package.json linguist-detectable=false
+package-lock.json linguist-detectable=false
+
+# *.js linguist-detectable=false
+
+*.go linguist-detectable=true

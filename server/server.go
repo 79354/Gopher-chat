@@ -1,62 +1,99 @@
 package main
 
 import (
-	"fmt"
-	"log"
-	"os"
+    "fmt"
+    "log"
+    "os"
 
-	"chat-app/config"
-	"chat-app/handlers"
-	"chat-app/utils"
+    "chat-app/config"
+    "chat-app/handlers"
+    "chat-app/utils"
 
-	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
+    "github.com/gin-gonic/gin"
+    "github.com/joho/godotenv"
 )
 
-func main(){
-	err := godotenv.Load()
-	if err != nil{
-		log.Fatal("Error loading the environment")
-	}
+func main() {
+    err := godotenv.Load()
+    if err != nil {
+        log.Println("Note: .env file not found, using system environment variables")
+    }
 
-	fmt.Printf("%s%s%s%s\n", "Server will start at http://", os.Getenv("HOST"), ":", os.Getenv("PORT"))
+    port := os.Getenv("PORT")
+    if port == "" {
+        port = "8080"
+    }
 
-	config.ConnectDatabase()
+    host := os.Getenv("HOST")
+    if host == "" {
+        host = "localhost"
+    }
 
-	router := gin.New()
-	router.Use(gin.Logger())
+    fmt.Printf("Server starting at http://%s:%s\n", host, port)
 
-	router.Use(utils.CORSMiddleware())
+    config.ConnectDatabase()
+    
+    // Connect to Redis (New Feature)
+    config.ConnectRedis()
+    
+    // Ensure we disconnect on shutdown
+    defer config.DisConnectDB()
 
-	routes(router)
+    router := gin.New()
+    router.Use(gin.Logger())
+    router.Use(gin.Recovery()) // Added recovery middleware to prevent crashes
+    router.Use(utils.CORSMiddleware())
 
-	router.Run(":" + os.Getenv("PORT"))
+    // Start the Lobby
+    go handlers.MainLobby.Run()
+
+    setupRoutes(router)
+
+    router.Run(":" + port)
 }
 
-func routes(router *gin.Engine) {
-	lobby := handlers.NewLobby()
-	go lobby.Run()
+func setupRoutes(router *gin.Engine) {
+    // Root route
+    router.GET("/", handlers.RenderHome())
 
-	router.GET("/", handlers.RenderHome())
+    // WebSocket Route
+    router.GET("/ws/:userID", func(c *gin.Context) {
+        userID := c.Param("userID")
+        if userID == "" {
+            c.JSON(400, gin.H{"error": "User ID required"})
+            return
+        }
 
-	router.GET("/isUsernameAvailable/:username", handlers.IsUsernameAvailable())
+        conn, err := handlers.Upgrader.Upgrade(c.Writer, c.Request, nil)
+        if err != nil {
+            log.Println("Failed to upgrade connection: ", err)
+            return
+        }
 
-	router.POST("/login", handlers.Login())
-	router.POST("/registration", handlers.Registration())
+        handlers.CreateClient(handlers.MainLobby, conn, userID)
+    })
 
-	router.GET("/UserSessionCheck/:userID", handlers.UserSessionCheck())
-	router.GET("/getConversation/:toUserID/:fromUserID", handlers.GetMessagesHandler())
+    // API Routes Group
+    api := router.Group("/api")
+    {
+        // Auth Routes
+        auth := api.Group("/auth")
+        {
+            auth.POST("/login", handlers.Login())
+            auth.POST("/register", handlers.Registration())
+            auth.GET("/check-username/:username", handlers.IsUsernameAvailable())
+        }
 
-	router.GET("/ws/:userID", func(c *gin.Context){
-		userID := c.Param("userID")
+        // User Routes
+        user := api.Group("/user")
+        {
+            user.GET("/session/:userID", handlers.UserSessionCheck())
+        }
 
-		// upgrade the HTTP connection to WebSocket connection
-		conn, err := handlers.Upgrader.Upgrade(c.Writer, c.Request, nil)
-		if err != nil{
-			log.Println("Failed to upgrade connection: ", err)
-			return
-		}
-
-		handlers.CreateClient(lobby, conn, userID)
-	})
+        // Message Routes
+        messages := api.Group("/messages")
+        {
+            messages.GET("/conversation/:toUserID/:fromUserID", handlers.GetMessagesHandler())
+        }
+    }
 }
