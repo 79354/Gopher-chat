@@ -17,21 +17,19 @@ type UserDetails struct {
 
 type Message struct {
 	ID         string    `json:"id" bson:"_id,omitempty"`
-    TempID     string    `json:"tempId,omitempty" bson:"-"` // Virtual field for ACK
-    Status     string    `json:"status" bson:"status"`      // sending, sent, delivered, read
-    Type       string    `json:"type" bson:"type"`          // text, image, file, system
 	Message    string    `json:"message" binding:"required" bson:"message"`
 	ToUserID   string    `json:"toUserID" binding:"required" bson:"toUserID"`
 	FromUserID string    `json:"fromUserID" binding:"required" bson:"fromUserID"`
+	Type       string    `json:"type" bson:"type"` // "text", "image", "file"
 	CreatedAt  time.Time `json:"createdAt,omitempty" bson:"createdAt,omitempty"`
 }
 
 // NEW: Friend System Structs
 type Friendship struct {
-	ID         string    `json:"id" bson:"_id,omitempty"`
-	RequesterID string   `json:"requesterID" bson:"requesterID"`
-	AddresseeID string   `json:"addresseeID" bson:"addresseeID"`
-	Status      string   `json:"status" bson:"status"` // "pending", "accepted"
+	ID          string    `json:"id" bson:"_id,omitempty"`
+	RequesterID string    `json:"requesterID" bson:"requesterID"`
+	AddresseeID string    `json:"addresseeID" bson:"addresseeID"`
+	Status      string    `json:"status" bson:"status"` // "pending", "accepted"
 	CreatedAt   time.Time `json:"createdAt" bson:"createdAt"`
 }
 
@@ -78,6 +76,8 @@ type MessagePayload struct {
 	FromUserID string `json:"fromUserID" binding:"required"`
 	ToUserID   string `json:"toUserID" binding:"required"`
 	Message    string `json:"message" binding:"required"`
+	Type       string `json:"type"` // "text", "image"
+	TempID     string `json:"tempId,omitempty"`
 }
 
 type APIResponse struct {

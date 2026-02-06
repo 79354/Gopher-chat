@@ -11,49 +11,47 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ... [RenderHome, IsUsernameAvailable, Login, Registration, UserSessionCheck, GetMessagesHandler STAY THE SAME] ...
-
-func RenderHome() gin.HandlerFunc{
-	return func(c *gin.Context){
+func RenderHome() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, APIResponse{
-			Code: http.StatusOK,
-			Status: http.StatusText(http.StatusOK),
-			Message: constants.APIWelcomeMessage,
+			Code:     http.StatusOK,
+			Status:   http.StatusText(http.StatusOK),
+			Message:  constants.APIWelcomeMessage,
 			Response: nil,
 		})
 	}
 }
 
-func IsUsernameAvailable() gin.HandlerFunc{
-	return func(c *gin.Context){
-		type usernameAvailable struct{
+func IsUsernameAvailable() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		type usernameAvailable struct {
 			IsUsernameAvailable bool `json:"isUsernameAvailable"`
 		}
-		
-		username:= c.Param("username")
+
+		username := c.Param("username")
 		isAlphaNumeric := regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$`).MatchString
 
-		if !isAlphaNumeric(username){
+		if !isAlphaNumeric(username) {
 			c.JSON(http.StatusBadRequest, APIResponse{
-				Code: http.StatusBadRequest,
-				Status: http.StatusText(http.StatusBadRequest),
-				Message: constants.UsernameCantBeEmpty,
+				Code:     http.StatusBadRequest,
+				Status:   http.StatusText(http.StatusBadRequest),
+				Message:  constants.UsernameCantBeEmpty,
 				Response: nil,
 			})
 			return
 		}
 
 		isUsernameAvailable := IsUsernameAvailableQueryHandler(username)
-		if isUsernameAvailable{
+		if isUsernameAvailable {
 			c.JSON(http.StatusOK, APIResponse{
-				Code: http.StatusOK,
-				Status: http.StatusText(http.StatusOK),
+				Code:    http.StatusOK,
+				Status:  http.StatusText(http.StatusOK),
 				Message: constants.UsernameIsAvailable,
 				Response: usernameAvailable{
 					IsUsernameAvailable: true,
 				},
 			})
-		}else{
+		} else {
 			c.JSON(http.StatusOK, APIResponse{
 				Code:    http.StatusOK,
 				Status:  http.StatusText(http.StatusOK),
@@ -66,11 +64,11 @@ func IsUsernameAvailable() gin.HandlerFunc{
 	}
 }
 
-func Login() gin.HandlerFunc{
-	return func(c *gin.Context){
+func Login() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var userDetails LoginRequest
 
-		if err := c.ShouldBindJSON(&userDetails); err != nil{
+		if err := c.ShouldBindJSON(&userDetails); err != nil {
 			c.JSON(http.StatusBadRequest, APIResponse{
 				Code:     http.StatusBadRequest,
 				Status:   http.StatusText(http.StatusBadRequest),
@@ -96,10 +94,10 @@ func Login() gin.HandlerFunc{
 				Message:  constants.PasswordCantBeEmpty,
 				Response: nil,
 			})
-	
+
 		}
 
-		userDetailsResponse, loginErrorMessage :=  LoginQueryHandler(userDetails)
+		userDetailsResponse, loginErrorMessage := LoginQueryHandler(userDetails)
 
 		if loginErrorMessage != nil {
 			c.JSON(http.StatusNotFound, APIResponse{
@@ -113,23 +111,23 @@ func Login() gin.HandlerFunc{
 
 		// succesfil login
 		c.JSON(http.StatusOK, APIResponse{
-			Code: http.StatusOK,
-			Status: http.StatusText(http.StatusOK),
-			Message: constants.UserLoginCompleted,
+			Code:     http.StatusOK,
+			Status:   http.StatusText(http.StatusOK),
+			Message:  constants.UserLoginCompleted,
 			Response: userDetailsResponse,
 		})
 	}
 }
 
-func Registration() gin.HandlerFunc{
-	return func(c *gin.Context){
+func Registration() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var requestPayload RegistrationRequest
 
-		if err := c.ShouldBindJSON(&requestPayload); err != nil{
+		if err := c.ShouldBindJSON(&requestPayload); err != nil {
 			c.JSON(http.StatusBadRequest, APIResponse{
-				Code: http.StatusBadRequest,
-				Status: http.StatusText(http.StatusBadRequest),
-				Message: constants.ServerFailedResponse,
+				Code:     http.StatusBadRequest,
+				Status:   http.StatusText(http.StatusBadRequest),
+				Message:  constants.ServerFailedResponse,
 				Response: nil,
 			})
 			return
@@ -156,7 +154,7 @@ func Registration() gin.HandlerFunc{
 		}
 
 		userObjectID, registrationErr := RegisterQueryHandler(requestPayload)
-		if registrationErr != nil{
+		if registrationErr != nil {
 			c.JSON(http.StatusInternalServerError, APIResponse{
 				Code:     http.StatusInternalServerError,
 				Status:   http.StatusText(http.StatusInternalServerError),
@@ -167,23 +165,23 @@ func Registration() gin.HandlerFunc{
 		}
 
 		c.JSON(http.StatusOK, APIResponse{
-			Code:     http.StatusOK,
-			Status:   http.StatusText(http.StatusOK),
-			Message:  constants.UserRegistrationCompleted,
+			Code:    http.StatusOK,
+			Status:  http.StatusText(http.StatusOK),
+			Message: constants.UserRegistrationCompleted,
 			Response: UserResponse{
 				Username: requestPayload.Username,
-				UserID: userObjectID,
+				UserID:   userObjectID,
 			},
 		})
 	}
 }
 
-func UserSessionCheck() gin.HandlerFunc{
-	return func(c *gin.Context){
+func UserSessionCheck() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var IsAlphaNumeric = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$`).MatchString
 		uid := c.Param("userID")
 
-		if !IsAlphaNumeric(uid){
+		if !IsAlphaNumeric(uid) {
 			c.JSON(http.StatusBadRequest, APIResponse{
 				Code:     http.StatusBadRequest,
 				Status:   http.StatusText(http.StatusBadRequest),
@@ -194,7 +192,7 @@ func UserSessionCheck() gin.HandlerFunc{
 		}
 
 		userDetails := GetUserByUserID(uid)
-		if userDetails == (UserDetails{}){
+		if userDetails == (UserDetails{}) {
 			c.JSON(http.StatusOK, APIResponse{
 				Code:     http.StatusOK,
 				Status:   http.StatusText(http.StatusOK),
@@ -204,17 +202,19 @@ func UserSessionCheck() gin.HandlerFunc{
 			return
 		}
 
+		// FIXED: Return TRUE if user exists, regardless of Online status
+		// This ensures session persistence even if socket disconnected
 		c.JSON(http.StatusOK, APIResponse{
-			Code: http.StatusOK,
-			Status: http.StatusText(http.StatusOK),
-			Message: constants.YouAreLoggedIN,
-			Response: userDetails.Online == "Y",
+			Code:     http.StatusOK,
+			Status:   http.StatusText(http.StatusOK),
+			Message:  constants.YouAreLoggedIN,
+			Response: true,
 		})
 	}
 }
 
-func GetMessagesHandler() gin.HandlerFunc{
-	return func(c *gin.Context){
+func GetMessagesHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var IsAlphaNumeric = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$`).MatchString
 		toUserID := c.Param("toUserID")
 		fromUserID := c.Param("fromUserID")
@@ -238,7 +238,7 @@ func GetMessagesHandler() gin.HandlerFunc{
 		}
 
 		page, err := strconv.Atoi(c.Query("page"))
-		if err != nil || page < 1{
+		if err != nil || page < 1 {
 			log.Panic(err)
 		}
 		var pagee int64 = int64(page)
@@ -284,7 +284,7 @@ func SendFriendRequestHandler() gin.HandlerFunc {
 
 		// Trigger Notification via Redis
 		sender := GetUserByUserID(fromUserID)
-		SendNotification(targetUser.ID, sender.Username, "friend_request", sender.Username + " sent you a friend request")
+		SendNotification(targetUser.ID, sender.Username, "friend_request", sender.Username+" sent you a friend request")
 
 		c.JSON(http.StatusOK, APIResponse{
 			Code: http.StatusOK, Message: "Friend Request Sent",
@@ -295,7 +295,7 @@ func SendFriendRequestHandler() gin.HandlerFunc {
 func AcceptFriendRequestHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Requester ID (The person who sent the original request)
-		requesterID := c.Param("requesterID") 
+		requesterID := c.Param("requesterID")
 		// Addressee ID (The person accepting it - ME)
 		myUserID := c.Param("myUserID")
 
@@ -308,7 +308,7 @@ func AcceptFriendRequestHandler() gin.HandlerFunc {
 
 		// Notify the requester that I accepted
 		me := GetUserByUserID(myUserID)
-		SendNotification(requesterID, me.Username, "friend_accept", me.Username + " accepted your friend request")
+		SendNotification(requesterID, me.Username, "friend_accept", me.Username+" accepted your friend request")
 
 		c.JSON(http.StatusOK, APIResponse{
 			Code: http.StatusOK, Message: "Friend Request Accepted",
