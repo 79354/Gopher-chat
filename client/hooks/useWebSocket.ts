@@ -91,12 +91,46 @@ export const useWebSocket = (userID: string | null) => {
           case 'chatlist-response':
             handleChatListResponse(data.payload);
             break;
+
           case 'message-response':
             handleMessageResponse(data.payload);
             break;
-          case 'typing-response':
-            handleTypingEvent(data.payload);
+
+          case 'typing-response': {
+            const { fromUserID } = data.payload;
+
+            // FIXED: Changed setUserTyping -> setTyping
+            useChatStore.getState().setTyping(fromUserID, true);
+
+            setTimeout(() => {
+              useChatStore.getState().setTyping(fromUserID, false);
+            }, 3000);
+
             break;
+          }
+
+          case 'user_status': {
+            // FIXED: Added username extraction
+            const { userID, status, username } = data.payload;
+            const currentOnline = useChatStore.getState().onlineUsers;
+
+            if (status === 'Y') {
+              if (!currentOnline.some(u => u.userID === userID)) {
+                useChatStore
+                  .getState()
+                  .setOnlineUsers([...currentOnline, { userID, username: username || 'User' }]);
+              }
+            } else {
+              useChatStore
+                .getState()
+                .setOnlineUsers(
+                  currentOnline.filter(u => u.userID !== userID)
+                );
+            }
+
+            break;
+          }
+
           default:
             console.log('Unknown event:', data.type);
         }
@@ -104,6 +138,7 @@ export const useWebSocket = (userID: string | null) => {
         console.error('Error parsing WebSocket message:', error);
       }
     };
+
 
     ws.onclose = () => {
       console.log('WebSocket disconnected');

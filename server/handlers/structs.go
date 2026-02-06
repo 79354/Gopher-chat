@@ -78,6 +78,7 @@ type MessagePayload struct {
 	Message    string `json:"message" binding:"required"`
 	Type       string `json:"type"` // "text", "image"
 	TempID     string `json:"tempId,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 type APIResponse struct {

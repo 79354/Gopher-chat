@@ -2,12 +2,15 @@ package handlers
 
 import (
 	// "log"
+	"context"
+	"encoding/json"
 	"net/http"
 	"regexp"
 	"strconv"
 	"sync"
 	"time"
 
+	"chat-app/config"
 	"chat-app/constants"
 
 	"github.com/gin-gonic/gin"
@@ -301,7 +304,7 @@ func JoinRandomChatHandler() gin.HandlerFunc {
                 
                 c.JSON(200, APIResponse{
                     Code: 200, 
-                    Response: map[string]string{"matchID": waitingID, "role": "initiator"}
+                    Response: map[string]string{"matchID": waitingID, "role": "initiator"},
                 })
                 return
             }
@@ -316,7 +319,7 @@ func JoinRandomChatHandler() gin.HandlerFunc {
         case partnerID := <-myChan:
             c.JSON(200, APIResponse{
                 Code: 200, 
-                Response: map[string]string{"matchID": partnerID, "role": "peer"}
+                Response: map[string]string{"matchID": partnerID, "role": "peer"},
             })
         case <-timeout:
             queueMutex.Lock()
@@ -441,4 +444,11 @@ func DeleteMessagesHandler() gin.HandlerFunc {
         
         c.JSON(200, APIResponse{Message: "Messages deleted"})
     }
+}
+
+func isRandomChat(userID string) bool {
+    // For now, we simply check if the ID is explicitly "random".
+    // Since random chat matches assign a real partner ID, 
+    // this safeguards the initial join request or specific logic.
+    return userID == "random"
 }

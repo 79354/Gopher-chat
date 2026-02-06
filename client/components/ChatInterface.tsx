@@ -65,14 +65,11 @@ export default function ChatInterface() {
   const { sendMessage, sendTyping } = useWebSocket(currentUser?.userID || null);
 
   // --- Filtered Lists ---
-  // KEY CHANGE: Only show FRIENDS who are online, not all online users
-  // FILTERING LOGIC: Separate friends into Online and Offline
-  const onlineFriends = friends.filter(friend =>
-    onlineUsers.some(u => u.userID === friend.userID)
-  );
-  const offlineFriends = friends.filter(friend =>
-    !onlineUsers.some(u => u.userID === friend.userID)
-  );
+
+  // 1. Create a Set of Online IDs for O(1) lookup and type safety
+  const onlineIDs = new Set(onlineUsers.map(u => String(u.userID)));
+  const onlineFriends = friends.filter(friend => onlineIDs.has(String(friend.userID)));
+  const offlineFriends = friends.filter(friend => !onlineIDs.has(String(friend.userID)));
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior });

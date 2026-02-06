@@ -43,188 +43,145 @@ func createWSMessage(msgType string, data interface{}, targetID string) WSMessag
 }
 
 func HandleSocketPayloadEvents(client *Client, msg WSMessage) {
-	type chatListResponse struct {
-		Type     string      `json:"type"`
-		Chatlist interface{} `json:"chatlist"`
-	}
+    type chatListResponse struct {
+        Type     string      `json:"type"`
+        Chatlist interface{} `json:"chatlist"`
+    }
+    
+    // Structure for the new simple status event
+    type userStatusEvent struct {
+        UserID   string `json:"userID"`
+        Username string `json:"username"`
+        Status   string `json:"status"` // "Y" or "N"
+    }
 
-	switch msg.Type {
-	case "join":
-		var userID string
-		// Unmarshal the RawMessage into a string
-		if err := json.Unmarshal(msg.Payload, &userID); err != nil {
-			log.Printf("Error unmarshaling join payload: %v", err)
-			return
-		}
+    switch msg.Type {
+    case "join":
+        var userID string
+        if err := json.Unmarshal(msg.Payload, &userID); err != nil {
+            log.Printf("Error unmarshaling join payload: %v", err)
+            return
+        }
 
-		userDetails := GetUserByUserID(userID)
+        userDetails := GetUserByUserID(userID)
 
-		if userDetails == (UserDetails{}) {
-			log.Println("An invalid user with userID " + userID + " tried to connect to Chat Server.")
-		} else {
-			if userDetails.Online == "N" {
-				log.Println(userID + " tried to connect to Chat Server.")
-			} else {
-				// 1. Announce in the chatlist arrival of new client
-				newUserOnlinePayload := createWSMessage("chatlist-response", chatListResponse{
-					Type: "new-user-joined",
-					Chatlist: UserResponse{
-						Username: userDetails.Username,
-						UserID:   userDetails.ID,
-						Online:   userDetails.Online,
-					},
-				}, "") // Empty TargetID broadcasts to all
+        if userDetails.ID != "" {
+            if userDetails.Online != "N" {
+                // 1. Broadcast "user_status" (Online) to EVERYONE
+                statusPayload := createWSMessage("user_status", userStatusEvent{
+                    UserID:   userDetails.ID,
+                    Username: userDetails.Username,
+                    Status:   "Y",
+                }, "") 
+                PublishMessage(statusPayload)
 
-				PublishMessage(newUserOnlinePayload)
+                // 2. Send "my-chatlist" ONLY to the joining client (so they know who is online)
+                allOnlineUsersPayload := createWSMessage("chatlist-response", chatListResponse{
+                    Type:     "my-chatlist",
+                    Chatlist: GetAllOnlineUsers(userDetails.ID),
+                }, userDetails.ID)
+                EmitToClient(client.Lobby, allOnlineUsersPayload, userDetails.ID)
 
-				// 2. For the client to see everyone that's online (Keep this local direct send)
-				allOnlineUsersPayload := createWSMessage("chatlist-response", chatListResponse{
-					Type:     "my-chatlist",
-					Chatlist: GetAllOnlineUsers(userDetails.ID),
-				}, userDetails.ID)
+                // 3. Flush Offline Messages
+                ctx := context.Background()
+                offlineKey := "offline_msgs:" + userID
+                messages, err := config.RedisClient.LRange(ctx, offlineKey, 0, -1).Result()
+                if err == nil && len(messages) > 0 {
+                    for _, msgStr := range messages {
+                        var savedMsg MessagePayload
+                        json.Unmarshal([]byte(msgStr), &savedMsg)
+                        payload := createWSMessage("message-response", savedMsg, userID)
+                        EmitToClient(client.Lobby, payload, userID)
+                    }
+                    config.RedisClient.Del(ctx, offlineKey)
+                }
+            }
+        }
 
-				EmitToClient(client.Lobby, allOnlineUsersPayload, userDetails.ID)
+    case "disconnect":
+        if len(msg.Payload) > 0 {
+            var userID string
+            if err := json.Unmarshal(msg.Payload, &userID); err == nil {
+                userDetails := GetUserByUserID(userID)
+                UpdateUserOnlineStatusByUserID(userID, "N")
 
-				// 3. FLUSH OFFLINE MESSAGES FROM REDIS (Goal 3: Reliability)
-				// This satisfies the request to store in Redis and send when online
-				ctx := context.Background()
-				offlineKey := "offline_msgs:" + userID
-				
-				// Get all messages
-				messages, err := config.RedisClient.LRange(ctx, offlineKey, 0, -1).Result()
-				if err == nil && len(messages) > 0 {
-					log.Printf("Flushing %d offline messages to %s", len(messages), userDetails.Username)
-					for _, msgStr := range messages {
-						var savedMsg MessagePayload
-						json.Unmarshal([]byte(msgStr), &savedMsg)
-						
-						// Send immediately to this client
-						payload := createWSMessage("message-response", savedMsg, userID)
-						EmitToClient(client.Lobby, payload, userID)
-					}
-					// Clear the queue
-					config.RedisClient.Del(ctx, offlineKey)
-				}
-			}
-		}
-	case "disconnect":
-		// Check if payload exists
-		if len(msg.Payload) > 0 {
-			var userID string
-			if err := json.Unmarshal(msg.Payload, &userID); err == nil {
-				userDetails := GetUserByUserID(userID)
-				UpdateUserOnlineStatusByUserID(userID, "N")
+                // Broadcast "user_status" (Offline) to EVERYONE
+                disconnectMsg := createWSMessage("user_status", userStatusEvent{
+                    UserID:   userDetails.ID,
+                    Username: userDetails.Username,
+                    Status:   "N",
+                }, "")
+                PublishMessage(disconnectMsg)
+            }
+        }
 
-				// CHANGED: Use PublishMessage (Redis)
-				disconnectMsg := createWSMessage("chatlist-response", chatListResponse{
-					Type: "user-disconnected",
-					Chatlist: UserResponse{
-						Online:   "N",
-						UserID:   userDetails.ID,
-						Username: userDetails.Username,
-					},
-				}, "")
+    case "message":
+        var payloadData map[string]string
+        if err := json.Unmarshal(msg.Payload, &payloadData); err != nil {
+            return
+        }
 
-				PublishMessage(disconnectMsg)
-			}
-		}
-	case "message":
-		// Unmarshal directly into a map to safely grab strings
-		var payloadData map[string]string
-		if err := json.Unmarshal(msg.Payload, &payloadData); err != nil {
-			log.Printf("Error unmarshaling message payload: %v", err)
-			return
-		}
+        message := payloadData["message"]
+        toUserID := payloadData["toUserID"]
+        fromUserID := payloadData["fromUserID"]
+        tempID := payloadData["tempId"] 
+        msgType := payloadData["type"]
+        if msgType == "" { msgType = "text" }
 
-		message := payloadData["message"]
-		toUserID := payloadData["toUserID"]
-		fromUserID := payloadData["fromUserID"]
-		tempID := payloadData["tempId"] 
-		msgType := payloadData["type"] // Extract type (text/image) for Goal 1
+        fromUser := GetUserByUserID(fromUserID)
+        toUser := GetUserByUserID(toUserID)
 
-		if msgType == "" {
-			msgType = "text"
-		}
+        if message != "" && fromUserID != "" && toUserID != "" {
+            messagePacket := MessagePayload{
+                FromUserID: fromUserID,
+                Message:    message,
+                ToUserID:   toUserID,
+                Type:       msgType,
+                TempID:     tempID,
+                CreatedAt:  time.Now(),
+            }
 
-		// Get sender info for notification
-		fromUser := GetUserByUserID(fromUserID)
-		toUser := GetUserByUserID(toUserID) // Need recipient status
+            if toUserID == "global" {
+                globalPayload := createWSMessage("message-response", messagePacket, "") 
+                PublishMessage(globalPayload)
+                
+                ctx := context.Background()
+                jsonMsg, _ := json.Marshal(messagePacket)
+                config.RedisClient.LPush(ctx, "global_chat_history", jsonMsg)
+                config.RedisClient.LTrim(ctx, "global_chat_history", 0, 49)
+                
+            } else if toUserID == "random" || isRandomChat(toUserID) { 
+                responsePayload := createWSMessage("message-response", messagePacket, toUserID)
+                PublishMessage(responsePayload)
+            } else {
+                StoreNewMessages(messagePacket)
 
-		if message != "" && fromUserID != "" && toUserID != "" {
-			messagePacket := MessagePayload{
-				FromUserID: fromUserID,
-				Message:    message,
-				ToUserID:   toUserID,
-				Type:       msgType,
-				TempID:     tempID,
-				CreatedAt:  time.Now(),
-			}
+                responsePayload := createWSMessage("message-response", messagePacket, toUserID)
+                PublishMessage(responsePayload)
 
-			// === LOGIC START ===
-			if toUserID == "global" {
-				// 1. GLOBAL CHAT: Redis Only
-				
-				// Broadcast immediately
-				globalPayload := createWSMessage("message-response", messagePacket, "") 
-				PublishMessage(globalPayload)
-				
-				// Store in Redis List (JSON)
-				ctx := context.Background()
-				jsonMsg, _ := json.Marshal(messagePacket)
-				
-				// Push to head of list
-				config.RedisClient.LPush(ctx, "global_chat_history", jsonMsg)
-				
-				// Trim to keep only last 50 messages
-				config.RedisClient.LTrim(ctx, "global_chat_history", 0, 49)
-				
-			} else if toUserID == "random" || isRandomChat(toUserID) { 
-				// 2. RANDOM CHAT: No Storage, Just Relay
-				// You need logic to find the partner's ID based on your session
-				// For now, assuming 'toUserID' is the actual partner's ID provided by frontend
-				
-				responsePayload := createWSMessage("message-response", messagePacket, toUserID)
-				PublishMessage(responsePayload)
-				
-				// Don't store in DB!
-				
-			}else {
-				StoreNewMessages(messagePacket)		// DB Call
+                if toUser.Online != "Y" {
+                    ctx := context.Background()
+                    jsonMsg, _ := json.Marshal(messagePacket)
+                    config.RedisClient.RPush(ctx, "offline_msgs:"+toUserID, jsonMsg)
+                }
 
-				// 1. Send Chat Message via Redis (Targeted)
-				responsePayload := createWSMessage("message-response", messagePacket, toUserID)
-				PublishMessage(responsePayload)
+                if fromUserID != toUserID {
+                    ackPayload := createWSMessage("message-response", messagePacket, fromUserID)
+                    PublishMessage(ackPayload)
+                }
+                SendNotification(toUserID, fromUser.Username, "new_message", "New message from "+fromUser.Username)
+            }
+        }
 
-				// 2. Check if Recipient is Offline, if so, Queue in Redis (Goal 3)
-				if toUser.Online != "Y" {
-					log.Printf("User %s is offline, queuing message in Redis", toUser.Username)
-					ctx := context.Background()
-					jsonMsg, _ := json.Marshal(messagePacket)
-					config.RedisClient.RPush(ctx, "offline_msgs:"+toUserID, jsonMsg)
-				}
-
-				// 3. ACK Back to Sender (IMPORTANT for Optimistic UI)
-				if fromUserID != toUserID {
-					ackPayload := createWSMessage("message-response", messagePacket, fromUserID)
-					PublishMessage(ackPayload)
-				}
-
-				// 4. Send Notification via Redis
-				SendNotification(toUserID, fromUser.Username, "new_message", "New message from "+fromUser.Username)
-			}
-		}
-
-	case "typing": // NEW: Typing handler
-		var payloadData map[string]interface{}
-		if err := json.Unmarshal(msg.Payload, &payloadData); err != nil {
-			log.Printf("Error unmarshaling typing payload: %v", err)
-			return
-		}
-
-		toUserID := payloadData["toUserID"].(string)
-		// Broadcast typing to the target user via Redis
-		PublishMessage(createWSMessage("typing-response", payloadData, toUserID))
-	}
+    case "typing": 
+        var payloadData map[string]interface{}
+        if err := json.Unmarshal(msg.Payload, &payloadData); err != nil {
+            return
+        }
+        toUserID := payloadData["toUserID"].(string)
+        // Broadcast typing to the target user
+        PublishMessage(createWSMessage("typing-response", payloadData, toUserID))
+    }
 }
 
 func setSocketPayloadReadConfig(c *Client) {

@@ -88,7 +88,9 @@ func setupRoutes(router *gin.Engine) {
         user := api.Group("/user")
         {
             user.GET("/session/:userID", handlers.UserSessionCheck())
-            api.GET("/random/join/:userID", handlers.JoinRandomChatHandler())
+            
+            // FIXED LINE BELOW: Changed 'api.GET' to 'user.GET'
+            user.GET("/random/join/:userID", handlers.JoinRandomChatHandler()) 
         }
 
         // Message Routes
@@ -98,15 +100,11 @@ func setupRoutes(router *gin.Engine) {
         }
 
         friends := api.Group("/friends")
-		{
-			// POST JSON: { "targetUsername": "john" }
-			friends.POST("/request/:fromUserID", handlers.SendFriendRequestHandler())
-			// Accept a specific requester
-			friends.POST("/accept/:requesterID/:myUserID", handlers.AcceptFriendRequestHandler())
-			// Get Pending Requests
-			friends.GET("/requests/:userID", handlers.GetPendingRequestsHandler())
-			// Get Friends List
-			friends.GET("/list/:userID", handlers.GetFriendListHandler())
-		}
+        {
+            friends.POST("/request/:fromUserID", handlers.SendFriendRequestHandler())
+            friends.POST("/accept/:requesterID/:myUserID", handlers.AcceptFriendRequestHandler())
+            friends.GET("/requests/:userID", handlers.GetPendingRequestsHandler())
+            friends.GET("/list/:userID", handlers.GetFriendListHandler())
+        }
     }
 }
