@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"log"
+	// "log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -237,9 +237,12 @@ func GetMessagesHandler() gin.HandlerFunc {
 			return
 		}
 
-		page, err := strconv.Atoi(c.Query("page"))
+		// Use DefaultQuery to prevent panic
+		// This prevents "strconv.Atoi: parsing "": invalid syntax" crash
+		pageStr := c.DefaultQuery("page", "1")
+		page, err := strconv.Atoi(pageStr)
 		if err != nil || page < 1 {
-			log.Panic(err)
+			page = 1  // Fallback to page 1 instead of panicking
 		}
 		var pagee int64 = int64(page)
 
@@ -253,7 +256,7 @@ func GetMessagesHandler() gin.HandlerFunc {
 	}
 }
 
-// ---------------- NEW SOCIAL GRAPH HANDLERS ----------------
+// NEW SOCIAL GRAPH HANDLERS
 
 func SendFriendRequestHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {

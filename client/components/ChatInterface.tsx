@@ -18,7 +18,12 @@ import {
   CheckCheck,
   AlertCircle,
   MoreVertical,
-  Phone
+  Phone,
+  UserPlus,
+  X,
+  Search,
+  Globe,
+  Shuffle
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -26,6 +31,12 @@ export default function ChatInterface() {
   const [messageInput, setMessageInput] = useState('');
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
+  // Friend System States
+  const [showFriendModal, setShowFriendModal] = useState(false);
+  const [friendSearchQuery, setFriendSearchQuery] = useState('');
+  const [searchResult, setSearchResult] = useState<any>(null);
+  const [searching, setSearching] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -39,12 +50,19 @@ export default function ChatInterface() {
     messages,
     typingUsers,
     socketStatus,
+    friends,
     setActiveChat,
     setMessages,
+    setFriends,
   } = useChatStore();
 
-  // Note: Ensure your useWebSocket hook is updated to accept the 3rd 'type' argument
   const { sendMessage, sendTyping } = useWebSocket(currentUser?.userID || null);
+
+  // --- Filtered Lists ---
+  // KEY CHANGE: Only show FRIENDS who are online, not all online users
+  const onlineFriends = friends.filter(friend =>
+    onlineUsers.some(u => u.userID === friend.userID)
+  );
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior });
@@ -53,6 +71,18 @@ export default function ChatInterface() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, activeChat, typingUsers]);
+
+  // --- Load Friends on Mount ---
+  useEffect(() => {
+    if (currentUser) {
+      api.getFriends(currentUser.userID).then((friendsList) => {
+        setFriends(friendsList || []);
+      }).catch(err => {
+        console.error('Failed to load friends:', err);
+        setFriends([]);
+      });
+    }
+  }, [currentUser, setFriends]);
 
   // --- Load Conversation History ---
   useEffect(() => {
@@ -67,7 +97,6 @@ export default function ChatInterface() {
               id: msg.id || msg._id,
               timestamp: msg.timestamp || new Date(msg.createdAt).getTime(),
               status: 'read',
-              // Handle message type from DB or default to text
               type: msg.type || 'text'
             }));
             setMessages(activeChat.userID, formattedHistory);
@@ -83,15 +112,53 @@ export default function ChatInterface() {
     }
   }, [activeChat, currentUser, setMessages]);
 
-  // --- Handlers ---
+  // --- Friend Search Handler ---
+  const handleSearchFriend = async () => {
+    if (!friendSearchQuery.trim()) return;
 
+    setSearching(true);
+    setSearchResult(null);
+
+    try {
+      const exists = await api.checkUsername(friendSearchQuery.trim());
+      if (exists) {
+        setSearchResult({ username: friendSearchQuery.trim(), found: true });
+      } else {
+        setSearchResult({ username: friendSearchQuery.trim(), found: false });
+      }
+    } catch (e) {
+      console.error('Search error:', e);
+      setSearchResult({ username: friendSearchQuery.trim(), found: false });
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleSendFriendRequest = async () => {
+    if (!currentUser || !searchResult?.found) return;
+
+    try {
+      const success = await api.sendFriendRequest(searchResult.username);
+      if (success) {
+        alert(`Friend request sent to ${searchResult.username}!`);
+        setShowFriendModal(false);
+        setFriendSearchQuery('');
+        setSearchResult(null);
+      } else {
+        alert('Failed to send friend request. They might already be your friend.');
+      }
+    } catch (err) {
+      alert('Error sending friend request');
+    }
+  };
+
+  // --- Message Handlers ---
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setMessageInput(e.target.value);
 
     if (activeChat) {
       sendTyping(activeChat.userID, true);
 
-      // Debounce stop typing (1.5s)
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => {
         sendTyping(activeChat.userID, false);
@@ -103,8 +170,7 @@ export default function ChatInterface() {
     e.preventDefault();
     if (!messageInput.trim() || !activeChat) return;
 
-    // Send as text type
-    // @ts-ignore - Assuming useWebSocket is updated to support type argument
+    // @ts-ignore
     sendMessage(activeChat.userID, messageInput, 'text');
 
     setMessageInput('');
@@ -124,8 +190,7 @@ export default function ChatInterface() {
       const reader = new FileReader();
       reader.onloadend = () => {
         const base64String = reader.result as string;
-        // Send as image type
-        // @ts-ignore - Assuming useWebSocket is updated to support type argument
+        // @ts-ignore
         sendMessage(activeChat.userID, base64String, 'image');
       };
       reader.readAsDataURL(file);
@@ -146,44 +211,110 @@ export default function ChatInterface() {
         className="hidden"
       />
 
-      {/* Sidebar */}
+      {/* ========== SIDEBAR ========== */}
       <motion.aside
         initial={{ x: -300 }}
         animate={{ x: 0 }}
         className="w-80 bg-white/5 backdrop-blur-2xl border-r border-white/10 flex flex-col z-20"
       >
         {/* Header */}
-        <div className="p-6 border-b border-white/10">
+        <div className="p-6 border-b border-white/10 flex justify-between items-center">
           <div className="flex items-center gap-3">
-            <GopherLogo size={40} />
-            <div>
-              <h1 className="text-xl font-bold text-white tracking-tight">GopherChat</h1>
-              <div className="flex items-center gap-2 mt-1">
-                <span className={cn(
-                  "w-2 h-2 rounded-full animate-pulse",
-                  socketStatus === 'connected' ? "bg-green-500" :
-                    socketStatus === 'connecting' ? "bg-yellow-500" : "bg-red-500"
-                )} />
-                <span className="text-xs text-gray-400 capitalize">
-                  {socketStatus === 'connected' ? 'Online' : socketStatus}
-                </span>
-              </div>
-            </div>
+            <GopherLogo size={32} />
+            <span className="font-bold text-white">GopherChat</span>
           </div>
+          <button
+            onClick={() => setShowFriendModal(true)}
+            className="p-2 hover:bg-white/10 rounded-full text-gopher-blue transition-colors"
+            title="Find Friends"
+          >
+            <UserPlus size={20} />
+          </button>
         </div>
 
-        {/* User Profile (Mini) */}
-        <div className="px-6 py-4 border-b border-white/10 bg-white/5">
+        {/* Global & Random Chat Options */}
+        <div className="p-4 space-y-2">
+          <button className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-all">
+            <div className="p-2 bg-gopher-purple/20 rounded-lg text-gopher-purple">
+              <Globe size={20} />
+            </div>
+            <div className="text-left">
+              <p className="font-semibold">Global Chat</p>
+              <p className="text-xs opacity-50">Talk with everyone</p>
+            </div>
+          </button>
+
+          <button className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-all">
+            <div className="p-2 bg-orange-500/20 rounded-lg text-orange-500">
+              <Shuffle size={20} />
+            </div>
+            <div className="text-left">
+              <p className="font-semibold">Random Chat</p>
+              <p className="text-xs opacity-50">Meet strangers</p>
+            </div>
+          </button>
+        </div>
+
+        <div className="h-px bg-white/10 mx-6 my-2" />
+
+        {/* Friends List - ONLY SHOW ONLINE FRIENDS */}
+        <div className="flex-1 overflow-y-auto px-4">
+          <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3 px-2">
+            Online Friends ({onlineFriends.length})
+          </h3>
+
+          {onlineFriends.length === 0 ? (
+            <div className="text-center py-8 px-4">
+              <SleepingGopher />
+              <p className="text-sm text-gray-500 mt-4 italic">No friends online.</p>
+              <button
+                onClick={() => setShowFriendModal(true)}
+                className="mt-4 text-xs text-gopher-blue hover:text-gopher-blue/80"
+              >
+                Find friends to chat with
+              </button>
+            </div>
+          ) : (
+            onlineFriends.map(friend => (
+              <button
+                key={friend.userID}
+                onClick={() => setActiveChat(friend)}
+                className={cn(
+                  "w-full p-3 flex items-center gap-3 rounded-lg transition-colors mb-1",
+                  activeChat?.userID === friend.userID
+                    ? "bg-white/10 border border-white/20"
+                    : "hover:bg-white/5"
+                )}
+              >
+                <div className="relative">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gopher-blue to-gopher-purple flex items-center justify-center text-white font-bold">
+                    {friend.username[0].toUpperCase()}
+                  </div>
+                  <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-slate-900 rounded-full"></div>
+                </div>
+                <div className="text-left flex-1 min-w-0">
+                  <p className="text-white font-medium truncate">{friend.username}</p>
+                  {typingUsers[friend.userID] ? (
+                    <p className="text-xs text-gopher-blue font-medium animate-pulse">Typing...</p>
+                  ) : (
+                    <p className="text-xs text-gray-400">Online</p>
+                  )}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+
+        {/* User Footer */}
+        <div className="p-4 border-t border-white/10 bg-black/20">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gopher-blue to-gopher-purple flex items-center justify-center text-white font-bold shadow-lg">
-                {currentUser?.username?.[0]?.toUpperCase() || 'U'}
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gopher-blue to-gopher-purple flex items-center justify-center text-white font-bold">
+                {currentUser?.username?.[0]?.toUpperCase()}
               </div>
-              <div className="overflow-hidden">
-                <p className="text-white font-semibold truncate max-w-[120px]">
-                  {currentUser?.username}
-                </p>
-                <p className="text-xs text-gray-400">#{currentUser?.userID?.slice(0, 4)}</p>
+              <div className="text-sm">
+                <p className="text-white font-medium">{currentUser?.username}</p>
+                <p className="text-xs text-gray-500">#{currentUser?.userID.slice(0, 4)}</p>
               </div>
             </div>
             <button
@@ -191,69 +322,16 @@ export default function ChatInterface() {
                 localStorage.clear();
                 window.location.href = '/';
               }}
-              className="p-2 hover:bg-white/10 rounded-lg transition-colors text-gray-400 hover:text-red-400"
+              className="text-gray-400 hover:text-red-400 transition-colors"
               title="Logout"
             >
-              <LogOut className="w-5 h-5" />
+              <LogOut size={18} />
             </button>
-          </div>
-        </div>
-
-        {/* Users List */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar">
-          <div className="p-4">
-            <div className="flex items-center gap-2 mb-4 px-2">
-              <Users className="w-4 h-4 text-gray-400" />
-              <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
-                Online ({onlineUsers.length})
-              </h2>
-            </div>
-
-            <div className="space-y-1">
-              {onlineUsers.map((user) => (
-                <button
-                  key={user.userID}
-                  onClick={() => setActiveChat(user)}
-                  className={cn(
-                    'w-full p-3 rounded-xl transition-all text-left flex items-center gap-3 group',
-                    activeChat?.userID === user.userID
-                      ? 'bg-gradient-to-r from-gopher-blue/10 to-gopher-purple/10 border border-gopher-blue/30'
-                      : 'hover:bg-white/5 border border-transparent'
-                  )}
-                >
-                  <div className="relative">
-                    <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white font-semibold border border-white/10 group-hover:border-white/20 transition-colors">
-                      {user.username[0].toUpperCase()}
-                    </div>
-                    {/* Status Dot */}
-                    <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-slate-950 rounded-full flex items-center justify-center">
-                      <div className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse" />
-                    </div>
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex justify-between items-center mb-0.5">
-                      <p className={cn(
-                        "font-medium truncate",
-                        activeChat?.userID === user.userID ? "text-white" : "text-gray-300"
-                      )}>
-                        {user.username}
-                      </p>
-                    </div>
-                    {typingUsers[user.userID] ? (
-                      <p className="text-xs text-gopher-blue font-medium animate-pulse">Typing...</p>
-                    ) : (
-                      <p className="text-xs text-gray-500 truncate">Click to chat</p>
-                    )}
-                  </div>
-                </button>
-              ))}
-            </div>
           </div>
         </div>
       </motion.aside>
 
-      {/* Main Chat Area */}
+      {/* ========== MAIN CHAT AREA ========== */}
       <div className="flex-1 flex flex-col bg-slate-950 relative">
         <div className="absolute inset-0 bg-gradient-to-b from-gopher-blue/5 to-transparent pointer-events-none" />
 
@@ -354,7 +432,6 @@ export default function ChatInterface() {
                               msg.status === 'sending' && "opacity-70",
                               msg.status === 'failed' && "border-red-500/50 bg-red-500/10"
                             )}>
-                              {/* RENDER CONTENT BASED ON TYPE */}
                               {msg.type === 'image' ? (
                                 <img
                                   src={msg.message}
@@ -489,15 +566,104 @@ export default function ChatInterface() {
               <h2 className="text-3xl font-bold text-white mb-3">
                 Welcome to GopherChat
               </h2>
-              <p className="text-gray-400 text-lg">
+              <p className="text-gray-400 text-lg mb-4">
                 Real-time conversations powered by Go.
-                <br />
-                Select a user from the sidebar to begin.
               </p>
+              <button
+                onClick={() => setShowFriendModal(true)}
+                className="px-6 py-3 bg-gopher-blue hover:bg-gopher-blue/90 rounded-xl text-white font-semibold transition-colors"
+              >
+                Find Friends to Chat
+              </button>
             </div>
           </div>
         )}
       </div>
+
+      {/*ADD FRIEND MODAL*/}
+      <AnimatePresence>
+        {showFriendModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowFriendModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95 }}
+              animate={{ scale: 1 }}
+              className="w-full max-w-md bg-slate-900 border border-white/10 rounded-2xl p-6 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-bold text-white">Find Gophers</h2>
+                <button
+                  onClick={() => setShowFriendModal(false)}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X />
+                </button>
+              </div>
+
+              <div className="flex gap-2 mb-6">
+                <input
+                  type="text"
+                  value={friendSearchQuery}
+                  onChange={(e) => setFriendSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSearchFriend()}
+                  placeholder="Enter username..."
+                  className="flex-1 bg-black/20 border border-white/10 rounded-xl px-4 py-2 text-white outline-none focus:border-gopher-blue transition-colors"
+                />
+                <button
+                  onClick={handleSearchFriend}
+                  disabled={searching || !friendSearchQuery.trim()}
+                  className="bg-white/10 hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed p-2 rounded-xl text-white transition-colors"
+                >
+                  {searching ? (
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Search size={20} />
+                  )}
+                </button>
+              </div>
+
+              {searchResult && (
+                <div className={cn(
+                  "border rounded-xl p-4 flex justify-between items-center",
+                  searchResult.found
+                    ? "bg-green-500/10 border-green-500/20"
+                    : "bg-red-500/10 border-red-500/20"
+                )}>
+                  <div>
+                    <p className="text-white font-bold">{searchResult.username}</p>
+                    <p className={cn(
+                      "text-xs",
+                      searchResult.found ? "text-green-400" : "text-red-400"
+                    )}>
+                      {searchResult.found ? "User found" : "User not found"}
+                    </p>
+                  </div>
+                  {searchResult.found && (
+                    <button
+                      onClick={handleSendFriendRequest}
+                      className="bg-gopher-blue text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-gopher-blue/80 transition-colors"
+                    >
+                      Add Friend
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {!searchResult && (
+                <p className="text-gray-500 text-sm text-center py-8">
+                  Search for a username to send a friend request
+                </p>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

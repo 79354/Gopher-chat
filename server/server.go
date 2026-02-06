@@ -88,6 +88,7 @@ func setupRoutes(router *gin.Engine) {
         user := api.Group("/user")
         {
             user.GET("/session/:userID", handlers.UserSessionCheck())
+            api.GET("/random/join/:userID", handlers.JoinRandomChatHandler())
         }
 
         // Message Routes
