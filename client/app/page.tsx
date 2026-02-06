@@ -58,7 +58,7 @@ export default function AuthPage() {
       >
         <div className="absolute inset-0 bg-gradient-to-br from-gopher-blue/20 via-gopher-purple/20 to-transparent" />
         <div className="absolute inset-0 backdrop-blur-3xl" />
-        
+
         {/* Animated background orbs */}
         <motion.div
           animate={{
@@ -91,7 +91,7 @@ export default function AuthPage() {
           >
             <GopherLogo size={280} />
           </motion.div>
-          
+
           <motion.h1
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -101,14 +101,14 @@ export default function AuthPage() {
           >
             Gopher<span className="text-gopher-blue">Chat</span>
           </motion.h1>
-          
+
           <motion.p
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.7 }}
             className="mt-4 text-xl text-gray-400 text-center max-w-md"
           >
-            Where gophers connect in real-time. Built with Go, powered by WebSockets.
+            Where Go-developers connect in real time. Built with Go, powered by WebSockets.
           </motion.p>
         </div>
       </motion.div>

@@ -160,35 +160,43 @@ func HandleSocketPayloadEvents(client *Client, msg WSMessage) {
 			}
 			StoreNewMessages(messagePacket)
 
-			// 1. Send Chat Message via Redis (Targeted)
-			responsePayload := createWSMessage("message-response", messagePacket, toUserID)
-			PublishMessage(responsePayload)
+			// === LOGIC START ===
+			if toUserID == "global" {
+				// 1. GLOBAL CHAT: Broadcast to ALL users
+				// Use empty string as TargetID to signal broadcast
+				globalPayload := createWSMessage("message-response", messagePacket, "")
+				PublishMessage(globalPayload)
+			} else {
+				// 1. Send Chat Message via Redis (Targeted)
+				responsePayload := createWSMessage("message-response", messagePacket, toUserID)
+				PublishMessage(responsePayload)
 
-			// 2. Check if Recipient is Offline, if so, Queue in Redis (Goal 3)
-			if toUser.Online != "Y" {
-				log.Printf("User %s is offline, queuing message in Redis", toUser.Username)
-				ctx := context.Background()
-				jsonMsg, _ := json.Marshal(messagePacket)
-				config.RedisClient.RPush(ctx, "offline_msgs:"+toUserID, jsonMsg)
-			}
-			
-			// 3. ACK Back to Sender (IMPORTANT for Optimistic UI)
-			if fromUserID != toUserID {
-				ackPayload := createWSMessage("message-response", messagePacket, fromUserID)
-				PublishMessage(ackPayload)
-			}
+				// 2. Check if Recipient is Offline, if so, Queue in Redis (Goal 3)
+				if toUser.Online != "Y" {
+					log.Printf("User %s is offline, queuing message in Redis", toUser.Username)
+					ctx := context.Background()
+					jsonMsg, _ := json.Marshal(messagePacket)
+					config.RedisClient.RPush(ctx, "offline_msgs:"+toUserID, jsonMsg)
+				}
 
-			// 4. Send Notification via Redis
-			SendNotification(toUserID, fromUser.Username, "new_message", "New message from "+fromUser.Username)
+				// 3. ACK Back to Sender (IMPORTANT for Optimistic UI)
+				if fromUserID != toUserID {
+					ackPayload := createWSMessage("message-response", messagePacket, fromUserID)
+					PublishMessage(ackPayload)
+				}
+
+				// 4. Send Notification via Redis
+				SendNotification(toUserID, fromUser.Username, "new_message", "New message from "+fromUser.Username)
+			}
 		}
-		
+
 	case "typing": // NEW: Typing handler
 		var payloadData map[string]interface{}
 		if err := json.Unmarshal(msg.Payload, &payloadData); err != nil {
 			log.Printf("Error unmarshaling typing payload: %v", err)
 			return
 		}
-		
+
 		toUserID := payloadData["toUserID"].(string)
 		// Broadcast typing to the target user via Redis
 		PublishMessage(createWSMessage("typing-response", payloadData, toUserID))

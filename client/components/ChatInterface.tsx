@@ -23,6 +23,7 @@ import {
   X,
   Search,
   Globe,
+  Bell,
   Shuffle
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -43,6 +44,11 @@ export default function ChatInterface() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout>();
 
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
+  const [page, setPage] = useState(1);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+
   const {
     currentUser,
     onlineUsers,
@@ -60,8 +66,12 @@ export default function ChatInterface() {
 
   // --- Filtered Lists ---
   // KEY CHANGE: Only show FRIENDS who are online, not all online users
+  // FILTERING LOGIC: Separate friends into Online and Offline
   const onlineFriends = friends.filter(friend =>
     onlineUsers.some(u => u.userID === friend.userID)
+  );
+  const offlineFriends = friends.filter(friend =>
+    !onlineUsers.some(u => u.userID === friend.userID)
   );
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
@@ -111,6 +121,25 @@ export default function ChatInterface() {
       setShowEmojiPicker(false);
     }
   }, [activeChat, currentUser, setMessages]);
+
+  // Fetch pending requests on mount
+  useEffect(() => {
+    if (currentUser) {
+      api.getPendingRequests(currentUser.userID).then(setPendingRequests);
+    }
+  }, [currentUser, showNotifications]); // Refresh when modal opens
+
+  const handleAcceptRequest = async (requesterID: string) => {
+    if (!currentUser) return;
+    const success = await api.acceptFriendRequest(requesterID);
+    if (success) {
+      // Remove from list and refresh friends
+      setPendingRequests(prev => prev.filter(req => req.id !== requesterID));
+      const updatedFriends = await api.getFriends(currentUser.userID);
+      setFriends(updatedFriends);
+      alert("Friend request accepted!");
+    }
+  };
 
   // --- Friend Search Handler ---
   const handleSearchFriend = async () => {
@@ -200,6 +229,30 @@ export default function ChatInterface() {
   const currentMessages = activeChat ? messages[activeChat.userID] || [] : [];
   const isRecipientTyping = activeChat ? typingUsers[activeChat.userID] : false;
 
+  const handleGlobalChat = () => {
+    // For now, let's treat Global Chat as a special "user"
+    // Note: Backend needs to support "global" ID or we create a dummy user
+    setActiveChat({
+      userID: "global",
+      username: "Global Chat",
+      status: "online"
+    });
+  };
+
+  const handleRandomChat = async () => {
+    if (!currentUser) return;
+    const match = await api.joinRandomChat(currentUser.userID);
+    if (match && match.matchID) {
+      setActiveChat({
+        userID: match.matchID,
+        username: "Anonymous Gopher",
+        status: "online"
+      });
+    } else {
+      alert("Waiting for a random partner...");
+    }
+  };
+
   return (
     <div className="h-screen bg-slate-950 flex overflow-hidden font-body relative">
       {/* Hidden File Input */}
@@ -223,18 +276,35 @@ export default function ChatInterface() {
             <GopherLogo size={32} />
             <span className="font-bold text-white">GopherChat</span>
           </div>
-          <button
-            onClick={() => setShowFriendModal(true)}
-            className="p-2 hover:bg-white/10 rounded-full text-gopher-blue transition-colors"
-            title="Find Friends"
-          >
-            <UserPlus size={20} />
-          </button>
+
+          <div className="flex gap-2">
+            {/* Inbox Button */}
+            <button
+              onClick={() => setShowNotifications(true)}
+              className="relative p-2 hover:bg-white/10 rounded-full text-gopher-blue transition-colors"
+            >
+              <Bell size={20} />
+              {pendingRequests.length > 0 && (
+                <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+              )}
+            </button>
+
+            {/* Existing Find Friend Button */}
+            <button
+              onClick={() => setShowFriendModal(true)}
+              className="p-2 hover:bg-white/10 rounded-full text-gopher-blue transition-colors"
+            >
+              <UserPlus size={20} />
+            </button>
+          </div>
         </div>
 
         {/* Global & Random Chat Options */}
         <div className="p-4 space-y-2">
-          <button className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-all">
+          <button
+            onClick={handleGlobalChat}
+            className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-all"
+          >
             <div className="p-2 bg-gopher-purple/20 rounded-lg text-gopher-purple">
               <Globe size={20} />
             </div>
@@ -244,13 +314,17 @@ export default function ChatInterface() {
             </div>
           </button>
 
-          <button className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-all">
-            <div className="p-2 bg-orange-500/20 rounded-lg text-orange-500">
+          {/* Random Chat Button */}
+          <button
+            onClick={handleRandomChat}
+            className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-all"
+          >
+            <div className="p-2 bg-gopher-purple/20 rounded-lg text-gopher-purple">
               <Shuffle size={20} />
             </div>
             <div className="text-left">
               <p className="font-semibold">Random Chat</p>
-              <p className="text-xs opacity-50">Meet strangers</p>
+              <p className="text-xs opacity-50">Talk to Stranger</p>
             </div>
           </button>
         </div>
@@ -258,50 +332,67 @@ export default function ChatInterface() {
         <div className="h-px bg-white/10 mx-6 my-2" />
 
         {/* Friends List - ONLY SHOW ONLINE FRIENDS */}
-        <div className="flex-1 overflow-y-auto px-4">
-          <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3 px-2">
-            Online Friends ({onlineFriends.length})
-          </h3>
+        <div className="flex-1 overflow-y-auto px-4 custom-scrollbar">
 
-          {onlineFriends.length === 0 ? (
-            <div className="text-center py-8 px-4">
-              <SleepingGopher />
-              <p className="text-sm text-gray-500 mt-4 italic">No friends online.</p>
-              <button
-                onClick={() => setShowFriendModal(true)}
-                className="mt-4 text-xs text-gopher-blue hover:text-gopher-blue/80"
-              >
-                Find friends to chat with
-              </button>
-            </div>
-          ) : (
-            onlineFriends.map(friend => (
-              <button
-                key={friend.userID}
-                onClick={() => setActiveChat(friend)}
-                className={cn(
-                  "w-full p-3 flex items-center gap-3 rounded-lg transition-colors mb-1",
-                  activeChat?.userID === friend.userID
-                    ? "bg-white/10 border border-white/20"
-                    : "hover:bg-white/5"
-                )}
-              >
-                <div className="relative">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gopher-blue to-gopher-purple flex items-center justify-center text-white font-bold">
-                    {friend.username[0].toUpperCase()}
-                  </div>
-                  <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-slate-900 rounded-full"></div>
-                </div>
-                <div className="text-left flex-1 min-w-0">
-                  <p className="text-white font-medium truncate">{friend.username}</p>
-                  {typingUsers[friend.userID] ? (
-                    <p className="text-xs text-gopher-blue font-medium animate-pulse">Typing...</p>
-                  ) : (
-                    <p className="text-xs text-gray-400">Online</p>
+          {/* ONLINE FRIENDS */}
+          {onlineFriends.length > 0 && (
+            <div className="mb-4">
+              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 px-2">Online — {onlineFriends.length}</h3>
+              {onlineFriends.map(friend => (
+                <button
+                  key={friend.userID}
+                  onClick={() => setActiveChat(friend)}
+                  className={cn(
+                    "w-full p-2 flex items-center gap-3 rounded-lg transition-colors mb-1",
+                    activeChat?.userID === friend.userID ? "bg-white/10" : "hover:bg-white/5"
                   )}
-                </div>
-              </button>
-            ))
+                >
+                  <div className="relative">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gopher-blue to-gopher-purple flex items-center justify-center text-white font-bold">
+                      {friend.username[0].toUpperCase()}
+                    </div>
+                    <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-slate-900 rounded-full"></div>
+                  </div>
+                  <div className="text-left overflow-hidden">
+                    <p className="text-white font-medium truncate">{friend.username}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* OFFLINE FRIENDS */}
+          {offlineFriends.length > 0 && (
+            <div>
+              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 px-2">Offline — {offlineFriends.length}</h3>
+              {offlineFriends.map(friend => (
+                <button
+                  key={friend.userID}
+                  onClick={() => setActiveChat(friend)}
+                  className={cn(
+                    "w-full p-2 flex items-center gap-3 rounded-lg transition-colors mb-1 opacity-70 hover:opacity-100",
+                    activeChat?.userID === friend.userID ? "bg-white/10" : "hover:bg-white/5"
+                  )}
+                >
+                  <div className="relative">
+                    <div className="w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center text-white font-bold">
+                      {friend.username[0].toUpperCase()}
+                    </div>
+                    <div className="absolute bottom-0 right-0 w-3 h-3 bg-gray-500 border-2 border-slate-900 rounded-full"></div>
+                  </div>
+                  <div className="text-left overflow-hidden">
+                    <p className="text-gray-300 font-medium truncate">{friend.username}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {friends.length === 0 && (
+            <div className="text-center mt-10 opacity-50">
+              <p>No friends yet.</p>
+              <p className="text-xs">Search to add some!</p>
+            </div>
           )}
         </div>
 
@@ -660,6 +751,56 @@ export default function ChatInterface() {
                   Search for a username to send a friend request
                 </p>
               )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* NOTIFICATIONS MODAL */}
+      <AnimatePresence>
+        {showNotifications && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowNotifications(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95 }} animate={{ scale: 1 }}
+              className="w-full max-w-md bg-slate-900 border border-white/10 rounded-2xl p-6 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-bold text-white">Notifications</h2>
+                <button onClick={() => setShowNotifications(false)} className="text-gray-400 hover:text-white">
+                  <X />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {pendingRequests.length === 0 ? (
+                  <p className="text-gray-500 text-center py-4">No pending requests.</p>
+                ) : (
+                  pendingRequests.map((req) => (
+                    <div key={req.id} className="bg-white/5 p-4 rounded-xl flex items-center justify-between">
+                      <div>
+                        <p className="text-white font-bold">{req.username}</p>
+                        <p className="text-xs text-gray-400">Wants to be friends</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleAcceptRequest(req.id)}
+                          className="p-2 bg-green-500/20 text-green-500 rounded-lg hover:bg-green-500/30"
+                        >
+                          <Check size={18} />
+                        </button>
+                        <button className="p-2 bg-red-500/20 text-red-500 rounded-lg hover:bg-red-500/30">
+                          <X size={18} />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </motion.div>
           </motion.div>
         )}

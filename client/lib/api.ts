@@ -36,10 +36,9 @@ export const api = {
 
   // MESSAGE ENDPOINTS
 
-  getConversation: async (toUserID: string, fromUserID: string) => {
-    // FIXED: Always include ?page=1 to prevent server crash
+  getConversation: async (toUserID: string, fromUserID: string, page: number = 1) => {
     const response = await axios.get(
-      `${API_BASE_URL}/api/messages/conversation/${toUserID}/${fromUserID}?page=1`
+      `${API_BASE_URL}/api/messages/conversation/${toUserID}/${fromUserID}?page=${page}`
     );
     return response.data.response;
   },
@@ -142,6 +141,16 @@ export const api = {
       return [];
     }
   },
+
+  joinRandomChat: async (userID: string) => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/user/random/join/${userID}`);
+      return response.data.response; // Should return { matchID, role }
+    } catch (error) {
+      console.error('Error joining random chat:', error);
+      return null;
+    }
+  }
 };
 
 /**

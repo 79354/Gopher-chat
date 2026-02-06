@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"sync"
+	"time"
 
 	"chat-app/constants"
 
@@ -215,44 +217,104 @@ func UserSessionCheck() gin.HandlerFunc {
 
 func GetMessagesHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var IsAlphaNumeric = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$`).MatchString
 		toUserID := c.Param("toUserID")
 		fromUserID := c.Param("fromUserID")
 
-		if !IsAlphaNumeric(toUserID) {
+		// Validation
+		isAlphaNumeric := regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$`).MatchString
+		if !isAlphaNumeric(toUserID) || !isAlphaNumeric(fromUserID) {
 			c.JSON(http.StatusBadRequest, APIResponse{
-				Code:     http.StatusBadRequest,
-				Status:   http.StatusText(http.StatusBadRequest),
-				Message:  constants.UsernameCantBeEmpty,
-				Response: nil,
-			})
-			return
-		} else if !IsAlphaNumeric(fromUserID) {
-			c.JSON(http.StatusBadRequest, APIResponse{
-				Code:     http.StatusBadRequest,
-				Status:   http.StatusText(http.StatusBadRequest),
-				Message:  constants.UsernameCantBeEmpty,
-				Response: nil,
+				Code:    http.StatusBadRequest,
+				Message: constants.UsernameCantBeEmpty,
 			})
 			return
 		}
 
-		// Use DefaultQuery to prevent panic
-		// This prevents "strconv.Atoi: parsing "": invalid syntax" crash
+		// CRITICAL FIX: Handle missing 'page' parameter safely
 		pageStr := c.DefaultQuery("page", "1")
 		page, err := strconv.Atoi(pageStr)
 		if err != nil || page < 1 {
-			page = 1  // Fallback to page 1 instead of panicking
+			page = 1
 		}
-		var pagee int64 = int64(page)
-
-		conversations := GetConversationBetweenTwoUsers(toUserID, fromUserID, pagee)
+		
+		conversations := GetConversationBetweenTwoUsers(toUserID, fromUserID, int64(page))
+		
 		c.JSON(http.StatusOK, APIResponse{
 			Code:     http.StatusOK,
 			Status:   http.StatusText(http.StatusOK),
 			Message:  constants.SuccessfulResponse,
 			Response: conversations,
 		})
+	}
+}
+
+var (
+	randomQueue = make(map[string]chan string)
+	queueMutex  sync.Mutex
+)
+
+func JoinRandomChatHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := c.Param("userID")
+
+		queueMutex.Lock()
+		
+		// 1. Check if anyone else is waiting
+		for waitingID, ch := range randomQueue {
+			if waitingID != userID {
+				// Match Found! Remove waiter from queue
+				delete(randomQueue, waitingID)
+				queueMutex.Unlock()
+
+				// Notify the waiting user (send them MY userID)
+				select {
+				case ch <- userID:
+				default:
+					// Waiter disconnected
+				}
+
+				// Respond to ME (the Joiner) with THEIR userID
+				c.JSON(http.StatusOK, APIResponse{
+					Code:    http.StatusOK,
+					Message: "Match found",
+					Response: map[string]string{
+						"matchID": waitingID,
+						"role":    "initiator",
+					},
+				})
+				return
+			}
+		}
+
+		// 2. No match found, add myself to queue
+		myChan := make(chan string)
+		randomQueue[userID] = myChan
+		queueMutex.Unlock()
+
+		// 3. Wait for a match, timeout, or disconnect
+		select {
+		case partnerID := <-myChan:
+			c.JSON(http.StatusOK, APIResponse{
+				Code:    http.StatusOK,
+				Message: "Match found",
+				Response: map[string]string{
+					"matchID": partnerID,
+					"role":    "peer",
+				},
+			})
+		case <-time.After(30 * time.Second): // Timeout after 30s
+			queueMutex.Lock()
+			delete(randomQueue, userID)
+			queueMutex.Unlock()
+			c.JSON(http.StatusRequestTimeout, APIResponse{
+				Code:    408,
+				Message: "No match found, try again",
+			})
+		case <-c.Request.Context().Done(): // User closed browser
+			queueMutex.Lock()
+			delete(randomQueue, userID)
+			queueMutex.Unlock()
+		}
 	}
 }
 
