@@ -16,7 +16,17 @@ interface ChatListPayload {
 export const useWebSocket = (userID: string | null) => {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
-  const { setOnlineUsers, addMessage, currentUser } = useChatStore();
+  const typingTimeoutRef = useRef<NodeJS.Timeout>(); // To debounce typing stops
+
+  const {
+    setOnlineUsers,
+    addMessage,
+    updateMessageStatus,
+    setSocketStatus,
+    setTyping,
+    currentUser
+  } = useChatStore();
+
 
   const handleChatListResponse = useCallback(
     (payload: ChatListPayload) => {
@@ -37,40 +47,42 @@ export const useWebSocket = (userID: string | null) => {
     [setOnlineUsers]
   );
 
-  const handleMessageResponse = useCallback(
-    (payload: any) => {
-      if (!currentUser) return;
+  const handleMessageResponse = useCallback((payload: any) => {
+    if (!currentUser) return;
+    const otherUserID = payload.fromUserID === currentUser.userID ? payload.toUserID : payload.fromUserID;
 
-      const otherUserID =
-        payload.fromUserID === currentUser.userID
-          ? payload.toUserID
-          : payload.fromUserID;
+    // When we receive a message from the server:
+    // 1. If it's an ACK for our own message, this will update the status to 'sent' (matched by tempId)
+    // 2. If it's a new message from someone else, it will be added
+    addMessage(otherUserID, {
+      id: payload.id,
+      tempId: payload.tempId,
+      toUserID: payload.toUserID,
+      fromUserID: payload.fromUserID,
+      message: payload.message,
+      timestamp: payload.createdAt ? new Date(payload.createdAt).getTime() : Date.now(),
+      status: 'sent',
+      type: 'text'
+    });
+  }, [addMessage, currentUser]);
 
-      // When we receive a message from the server:
-      // 1. If it's an ACK for our own message, this will update the status to 'sent' (matched by tempId)
-      // 2. If it's a new message from someone else, it will be added
-      addMessage(otherUserID, {
-        id: payload.id,         // Ensure backend sends this real ID
-        tempId: payload.tempId, // Ensure backend echoes this back
-        toUserID: payload.toUserID,
-        fromUserID: payload.fromUserID,
-        message: payload.message,
-        timestamp: payload.createdAt
-          ? new Date(payload.createdAt).getTime()
-          : Date.now(),
-        status: 'sent', // Messages coming from server are confirmed 'sent'
-      });
-    },
-    [addMessage, currentUser]
-  );
+  const handleTypingEvent = useCallback((payload: any) => {
+    if (payload.fromUserID !== currentUser?.userID) {
+      setTyping(payload.fromUserID, payload.isTyping);
+    }
+  }, [currentUser, setTyping]);
+
+  // --- Connection Logic ---
 
   const connect = useCallback(() => {
     if (!userID || wsRef.current?.readyState === WebSocket.OPEN) return;
 
+    setSocketStatus('connecting');
     const ws = new WebSocket(getWebSocketURL(userID));
 
     ws.onopen = () => {
       console.log('WebSocket connected');
+      setSocketStatus('connected');
     };
 
     ws.onmessage = (event) => {
@@ -84,6 +96,10 @@ export const useWebSocket = (userID: string | null) => {
 
           case 'message-response':
             handleMessageResponse(data.payload);
+            break;
+
+          case 'typing-response':
+            handleTypingEvent(data.payload);
             break;
 
           default:
@@ -100,13 +116,15 @@ export const useWebSocket = (userID: string | null) => {
 
     ws.onclose = () => {
       console.log('WebSocket disconnected');
+      setSocketStatus('disconnected');
+      wsRef.current = null;
       reconnectTimeoutRef.current = setTimeout(() => {
         connect();
       }, 3000);
     };
 
     wsRef.current = ws;
-  }, [userID, handleChatListResponse, handleMessageResponse]);
+  }, [userID, setSocketStatus, handleChatListResponse, handleMessageResponse, handleTypingEvent]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -116,37 +134,54 @@ export const useWebSocket = (userID: string | null) => {
       wsRef.current.close();
       wsRef.current = null;
     }
-  }, []);
+    setSocketStatus('disconnected');
+  }, [setSocketStatus]);
+
+  // --- Actions ---
 
   const sendMessage = useCallback((toUserID: string, content: string) => {
-    if (!currentUser || !wsRef.current) return;
+    if (!currentUser) return;
 
-    // 1. Optimistic Update
     const tempId = crypto.randomUUID();
+    const timestamp = Date.now();
 
-    const optimisticMessage: Message = {
-      id: tempId, // Use tempId as ID initially
-      tempId: tempId,
+    // Optimistic UI
+    addMessage(toUserID, {
+      id: tempId,
+      tempId,
       toUserID,
       fromUserID: currentUser.userID,
       message: content,
-      timestamp: Date.now(),
-      status: 'sending'
-    };
+      timestamp,
+      status: 'sending',
+      type: 'text'
+    });
 
-    // Immediately show in UI
-    addMessage(toUserID, optimisticMessage);
+    // Network Send with Fallback
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'message',
+        payload: {
+          toUserID,
+          fromUserID: currentUser.userID,
+          message: content,
+          tempId
+        }
+      }));
+    } else {
+      // Immediate failure if offline
+      updateMessageStatus(toUserID, tempId, 'failed');
+    }
+  }, [currentUser, addMessage, updateMessageStatus]);
 
-    // 2. Send to Socket
-    wsRef.current.send(JSON.stringify({
-      type: 'message',
-      payload: {
-        ...optimisticMessage,
-        // We strictly send what the server expects, plus tempId for ACK
-        tempId
-      }
-    }));
-  }, [currentUser, addMessage]);
+  const sendTyping = useCallback((toUserID: string, isTyping: boolean) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN && currentUser) {
+      wsRef.current.send(JSON.stringify({
+        type: 'typing',
+        payload: { toUserID, fromUserID: currentUser.userID, isTyping }
+      }));
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     if (userID) {
@@ -160,6 +195,7 @@ export const useWebSocket = (userID: string | null) => {
 
   return {
     sendMessage,
-    isConnected: wsRef.current?.readyState === WebSocket.OPEN,
+    sendTyping,
+    isConnected: wsRef.current?.readyState === WebSocket.OPEN
   };
 };

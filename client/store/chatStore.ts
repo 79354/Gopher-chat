@@ -1,51 +1,86 @@
 import { create } from 'zustand';
 
+// --- Types ---
+
 export interface User {
   userID: string;
   username: string;
+  avatar?: string;
+  status?: 'online' | 'offline' | 'away';
 }
 
-export interface OnlineUser {
-  userID: string;
-  username: string;
-}
+// Retaining OnlineUser as a type alias for compatibility with existing imports
+export type OnlineUser = User;
 
 export interface Message {
-  id?: string;          // Real DB ID from server
-  tempId?: string;      // Temporary ID for optimistic updates
+  id: string;          // Real DB ID or temporary ID
+  tempId?: string;     // For optimistic updates
   toUserID: string;
   fromUserID: string;
   message: string;
   timestamp: number;
   status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+  type: 'text' | 'image' | 'file' | 'system'; // Added for Goal 1
+}
+
+export interface FriendRequest {
+  id: string;
+  fromUser: User;
+  status: 'pending' | 'accepted' | 'rejected';
 }
 
 interface ChatStore {
+  // --- Auth & Connection ---
   currentUser: User | null;
-  onlineUsers: OnlineUser[];
-  activeChat: OnlineUser | null;
-  messages: Record<string, Message[]>; // key: otherUserID, value: messages
+  socketStatus: 'connecting' | 'connected' | 'disconnected'; // For Goal 3 (Reliability)
 
+  // --- Social Graph ---
+  onlineUsers: User[];
+  friends: User[];
+  friendRequests: FriendRequest[];
+
+  // --- Chat State ---
+  activeChat: User | null;
+  messages: Record<string, Message[]>; // key: userID
+
+  // --- UX Features ---
+  typingUsers: Record<string, boolean>; // key: userID, value: isTyping
+
+  // --- Actions ---
   setCurrentUser: (user: User | null) => void;
-  setOnlineUsers: (users: OnlineUser[]) => void;
-  setActiveChat: (user: OnlineUser | null) => void;
+  setSocketStatus: (status: 'connecting' | 'connected' | 'disconnected') => void;
 
-  // Updated to handle upserts (add or update)
+  setOnlineUsers: (users: User[]) => void;
+  setFriends: (friends: User[]) => void;
+
+  setActiveChat: (user: User | null) => void;
+
+  // Optimistic UI Actions
   addMessage: (otherUserID: string, message: Message) => void;
-
+  updateMessageStatus: (otherUserID: string, tempId: string, status: Message['status']) => void;
   setMessages: (otherUserID: string, messages: Message[]) => void;
+
+  // Typing Actions
+  setTyping: (userID: string, isTyping: boolean) => void;
+
   clearStore: () => void;
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
   currentUser: null,
+  socketStatus: 'disconnected',
   onlineUsers: [],
+  friends: [],
+  friendRequests: [],
   activeChat: null,
   messages: {},
+  typingUsers: {},
 
   setCurrentUser: (user) => set({ currentUser: user }),
+  setSocketStatus: (status) => set({ socketStatus: status }),
 
   setOnlineUsers: (users) => set({ onlineUsers: users }),
+  setFriends: (friends) => set({ friends }),
 
   setActiveChat: (user) => set({ activeChat: user }),
 
@@ -53,22 +88,21 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => {
       const existingMessages = state.messages[otherUserID] || [];
 
-      // Check if message already exists (by tempId or real ID)
-      const messageIndex = existingMessages.findIndex(
+      // Upsert Logic: Check if message exists by tempId OR real ID
+      const index = existingMessages.findIndex(
         (m) =>
           (message.tempId && m.tempId === message.tempId) ||
           (message.id && m.id === message.id)
       );
 
-      if (messageIndex > -1) {
+      if (index > -1) {
         // UPDATE existing message (e.g., status change 'sending' -> 'sent')
-        const updatedMessages = [...existingMessages];
-        updatedMessages[messageIndex] = { ...updatedMessages[messageIndex], ...message };
-
+        const updated = [...existingMessages];
+        updated[index] = { ...updated[index], ...message };
         return {
           messages: {
             ...state.messages,
-            [otherUserID]: updatedMessages,
+            [otherUserID]: updated,
           },
         };
       }
@@ -82,6 +116,19 @@ export const useChatStore = create<ChatStore>((set) => ({
       };
     }),
 
+  updateMessageStatus: (otherUserID, tempId, status) =>
+    set((state) => {
+      const chatMessages = state.messages[otherUserID] || [];
+      return {
+        messages: {
+          ...state.messages,
+          [otherUserID]: chatMessages.map((m) =>
+            m.tempId === tempId ? { ...m, status } : m
+          ),
+        },
+      };
+    }),
+
   setMessages: (otherUserID, messages) =>
     set((state) => ({
       messages: {
@@ -90,11 +137,20 @@ export const useChatStore = create<ChatStore>((set) => ({
       },
     })),
 
+  setTyping: (userID, isTyping) =>
+    set((state) => ({
+      typingUsers: { ...state.typingUsers, [userID]: isTyping },
+    })),
+
   clearStore: () =>
     set({
       currentUser: null,
+      socketStatus: 'disconnected',
       onlineUsers: [],
+      friends: [],
+      friendRequests: [],
       activeChat: null,
       messages: {},
+      typingUsers: {},
     }),
 }));
