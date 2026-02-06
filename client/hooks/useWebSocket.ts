@@ -16,7 +16,7 @@ interface ChatListPayload {
 export const useWebSocket = (userID: string | null) => {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
-  const typingTimeoutRef = useRef<NodeJS.Timeout>(); // To debounce typing stops
+  const typingTimeoutRef = useRef<NodeJS.Timeout>();
 
   const {
     setOnlineUsers,
@@ -27,6 +27,7 @@ export const useWebSocket = (userID: string | null) => {
     currentUser
   } = useChatStore();
 
+  // --- Handlers ---
 
   const handleChatListResponse = useCallback(
     (payload: ChatListPayload) => {
@@ -51,9 +52,6 @@ export const useWebSocket = (userID: string | null) => {
     if (!currentUser) return;
     const otherUserID = payload.fromUserID === currentUser.userID ? payload.toUserID : payload.fromUserID;
 
-    // When we receive a message from the server:
-    // 1. If it's an ACK for our own message, this will update the status to 'sent' (matched by tempId)
-    // 2. If it's a new message from someone else, it will be added
     addMessage(otherUserID, {
       id: payload.id,
       tempId: payload.tempId,
@@ -62,7 +60,7 @@ export const useWebSocket = (userID: string | null) => {
       message: payload.message,
       timestamp: payload.createdAt ? new Date(payload.createdAt).getTime() : Date.now(),
       status: 'sent',
-      type: 'text'
+      type: payload.type || 'text' // Handle message types (text vs image)
     });
   }, [addMessage, currentUser]);
 
@@ -93,25 +91,18 @@ export const useWebSocket = (userID: string | null) => {
           case 'chatlist-response':
             handleChatListResponse(data.payload);
             break;
-
           case 'message-response':
             handleMessageResponse(data.payload);
             break;
-
           case 'typing-response':
             handleTypingEvent(data.payload);
             break;
-
           default:
             console.log('Unknown event:', data.type);
         }
       } catch (error) {
         console.error('Error parsing WebSocket message:', error);
       }
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
     };
 
     ws.onclose = () => {
@@ -139,13 +130,14 @@ export const useWebSocket = (userID: string | null) => {
 
   // --- Actions ---
 
-  const sendMessage = useCallback((toUserID: string, content: string) => {
+  // Updated signature to accept 'type' (defaulting to 'text')
+  const sendMessage = useCallback((toUserID: string, content: string, type: 'text' | 'image' = 'text') => {
     if (!currentUser) return;
 
     const tempId = crypto.randomUUID();
     const timestamp = Date.now();
 
-    // Optimistic UI
+    // 1. Optimistic UI
     addMessage(toUserID, {
       id: tempId,
       tempId,
@@ -154,10 +146,10 @@ export const useWebSocket = (userID: string | null) => {
       message: content,
       timestamp,
       status: 'sending',
-      type: 'text'
+      type: type
     });
 
-    // Network Send with Fallback
+    // 2. Network Send
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'message',
@@ -165,11 +157,11 @@ export const useWebSocket = (userID: string | null) => {
           toUserID,
           fromUserID: currentUser.userID,
           message: content,
-          tempId
+          tempId,
+          type // Include type in payload
         }
       }));
     } else {
-      // Immediate failure if offline
       updateMessageStatus(toUserID, tempId, 'failed');
     }
   }, [currentUser, addMessage, updateMessageStatus]);
@@ -187,7 +179,6 @@ export const useWebSocket = (userID: string | null) => {
     if (userID) {
       connect();
     }
-
     return () => {
       disconnect();
     };

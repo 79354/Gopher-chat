@@ -6,6 +6,7 @@ import { useChatStore, Message } from '@/store/chatStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { api } from '@/lib/api';
 import { GopherLogo, SleepingGopher, DiggingGopher } from '@/components/GopherLogo';
+import EmojiPicker, { Theme } from 'emoji-picker-react';
 import {
   Send,
   Paperclip,
@@ -24,8 +25,11 @@ import { cn } from '@/lib/utils';
 export default function ChatInterface() {
   const [messageInput, setMessageInput] = useState('');
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout>();
 
   const {
@@ -39,15 +43,14 @@ export default function ChatInterface() {
     setMessages,
   } = useChatStore();
 
+  // Note: Ensure your useWebSocket hook is updated to accept the 3rd 'type' argument
   const { sendMessage, sendTyping } = useWebSocket(currentUser?.userID || null);
 
-  // --- Auto-Scroll Logic (Smart) ---
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
     messagesEndRef.current?.scrollIntoView({ behavior });
   };
 
   useEffect(() => {
-    // Scroll on new message, active chat change, or typing
     scrollToBottom();
   }, [messages, activeChat, typingUsers]);
 
@@ -59,13 +62,13 @@ export default function ChatInterface() {
         try {
           const history = await api.getConversation(activeChat.userID, currentUser.userID);
           if (Array.isArray(history)) {
-            // Normalize history messages to have a 'read' status
             const formattedHistory: Message[] = history.map((msg: any) => ({
               ...msg,
-              id: msg.id || msg._id, // Handle DB ID variations
+              id: msg.id || msg._id,
               timestamp: msg.timestamp || new Date(msg.createdAt).getTime(),
-              status: 'read', // History is assumed read
-              type: 'text'
+              status: 'read',
+              // Handle message type from DB or default to text
+              type: msg.type || 'text'
             }));
             setMessages(activeChat.userID, formattedHistory);
           }
@@ -76,10 +79,12 @@ export default function ChatInterface() {
         }
       };
       loadHistory();
+      setShowEmojiPicker(false);
     }
   }, [activeChat, currentUser, setMessages]);
 
   // --- Handlers ---
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setMessageInput(e.target.value);
 
@@ -98,20 +103,49 @@ export default function ChatInterface() {
     e.preventDefault();
     if (!messageInput.trim() || !activeChat) return;
 
-    sendMessage(activeChat.userID, messageInput);
-    setMessageInput('');
+    // Send as text type
+    // @ts-ignore - Assuming useWebSocket is updated to support type argument
+    sendMessage(activeChat.userID, messageInput, 'text');
 
-    // Stop typing immediately when sent
+    setMessageInput('');
+    setShowEmojiPicker(false);
+
     sendTyping(activeChat.userID, false);
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
   };
 
-  // --- Render Helpers ---
+  const handleEmojiClick = (emojiData: any) => {
+    setMessageInput((prev) => prev + emojiData.emoji);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && activeChat) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64String = reader.result as string;
+        // Send as image type
+        // @ts-ignore - Assuming useWebSocket is updated to support type argument
+        sendMessage(activeChat.userID, base64String, 'image');
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const currentMessages = activeChat ? messages[activeChat.userID] || [] : [];
   const isRecipientTyping = activeChat ? typingUsers[activeChat.userID] : false;
 
   return (
-    <div className="h-screen bg-slate-950 flex overflow-hidden font-body">
+    <div className="h-screen bg-slate-950 flex overflow-hidden font-body relative">
+      {/* Hidden File Input */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileUpload}
+        accept="image/*"
+        className="hidden"
+      />
+
       {/* Sidebar */}
       <motion.aside
         initial={{ x: -300 }}
@@ -209,9 +243,7 @@ export default function ChatInterface() {
                     {typingUsers[user.userID] ? (
                       <p className="text-xs text-gopher-blue font-medium animate-pulse">Typing...</p>
                     ) : (
-                      <p className="text-xs text-gray-500 truncate">
-                        Click to chat
-                      </p>
+                      <p className="text-xs text-gray-500 truncate">Click to chat</p>
                     )}
                   </div>
                 </button>
@@ -223,7 +255,6 @@ export default function ChatInterface() {
 
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col bg-slate-950 relative">
-        {/* Background Effects */}
         <div className="absolute inset-0 bg-gradient-to-b from-gopher-blue/5 to-transparent pointer-events-none" />
 
         {activeChat ? (
@@ -272,7 +303,7 @@ export default function ChatInterface() {
             {/* Messages Canvas */}
             <div
               ref={scrollContainerRef}
-              className="flex-1 overflow-y-auto p-6 space-y-1 custom-scrollbar"
+              className="flex-1 overflow-y-auto p-6 space-y-1 custom-scrollbar relative"
             >
               {loadingHistory ? (
                 <div className="h-full flex flex-col items-center justify-center gap-4">
@@ -289,7 +320,6 @@ export default function ChatInterface() {
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {/* Date Separator (Mockup for now) */}
                   <div className="flex justify-center">
                     <div className="px-3 py-1 rounded-full bg-white/5 border border-white/5 text-xs text-gray-500">
                       Today
@@ -300,7 +330,6 @@ export default function ChatInterface() {
                     {currentMessages.map((msg, index) => {
                       const isMe = msg.fromUserID === currentUser?.userID;
                       const prevMsg = currentMessages[index - 1];
-                      // Group if same sender and < 5 mins apart
                       const isGrouped = prevMsg &&
                         prevMsg.fromUserID === msg.fromUserID &&
                         (msg.timestamp - prevMsg.timestamp < 5 * 60 * 1000);
@@ -317,7 +346,6 @@ export default function ChatInterface() {
                           )}
                         >
                           <div className={cn("max-w-[70%]", isMe ? "items-end" : "items-start")}>
-                            {/* Message Bubble */}
                             <div className={cn(
                               "px-4 py-2 text-sm md:text-base relative group shadow-sm transition-all",
                               isMe
@@ -326,9 +354,18 @@ export default function ChatInterface() {
                               msg.status === 'sending' && "opacity-70",
                               msg.status === 'failed' && "border-red-500/50 bg-red-500/10"
                             )}>
-                              <p className="break-words leading-relaxed whitespace-pre-wrap">{msg.message}</p>
+                              {/* RENDER CONTENT BASED ON TYPE */}
+                              {msg.type === 'image' ? (
+                                <img
+                                  src={msg.message}
+                                  alt="Attachment"
+                                  className="max-w-full rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+                                  onClick={() => window.open(msg.message, '_blank')}
+                                />
+                              ) : (
+                                <p className="break-words leading-relaxed whitespace-pre-wrap">{msg.message}</p>
+                              )}
 
-                              {/* Meta Info */}
                               <div className={cn(
                                 "flex items-center gap-1 mt-1 select-none",
                                 isMe ? "justify-end text-blue-100/70" : "justify-start text-gray-400"
@@ -354,7 +391,6 @@ export default function ChatInterface() {
                     })}
                   </AnimatePresence>
 
-                  {/* Typing Bubble */}
                   {isRecipientTyping && (
                     <motion.div
                       initial={{ opacity: 0, y: 10 }}
@@ -374,13 +410,34 @@ export default function ChatInterface() {
             </div>
 
             {/* Input Area */}
-            <div className="p-4 bg-white/5 backdrop-blur-2xl border-t border-white/10">
+            <div className="p-4 bg-white/5 backdrop-blur-2xl border-t border-white/10 relative z-30">
+              <AnimatePresence>
+                {showEmojiPicker && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 20 }}
+                    className="absolute bottom-full right-4 mb-4 z-50"
+                  >
+                    <div className="shadow-2xl rounded-2xl overflow-hidden border border-white/10">
+                      <EmojiPicker
+                        theme={Theme.DARK}
+                        onEmojiClick={handleEmojiClick}
+                        width={320}
+                        height={400}
+                      />
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <div className="max-w-4xl mx-auto">
                 <form onSubmit={handleSendMessage} className="flex items-end gap-3">
                   <button
                     type="button"
+                    onClick={() => fileInputRef.current?.click()}
                     className="p-3 hover:bg-white/10 rounded-xl transition-colors text-gray-400 hover:text-white"
-                    title="Attachments"
+                    title="Send Image"
                   >
                     <Paperclip className="w-5 h-5" />
                   </button>
@@ -397,7 +454,11 @@ export default function ChatInterface() {
 
                   <button
                     type="button"
-                    className="p-3 hover:bg-white/10 rounded-xl transition-colors text-gray-400 hover:text-white"
+                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                    className={cn(
+                      "p-3 rounded-xl transition-colors",
+                      showEmojiPicker ? "bg-white/10 text-gopher-blue" : "hover:bg-white/10 text-gray-400 hover:text-white"
+                    )}
                   >
                     <Smile className="w-5 h-5" />
                   </button>
@@ -415,16 +476,10 @@ export default function ChatInterface() {
                     <Send className="w-5 h-5" />
                   </button>
                 </form>
-                <div className="text-center mt-2">
-                  <p className="text-[10px] text-gray-600">
-                    Press Enter to send • Shift + Enter for new line
-                  </p>
-                </div>
               </div>
             </div>
           </>
         ) : (
-          // Empty State
           <div className="flex-1 flex flex-col items-center justify-center p-8 gap-8">
             <div className="relative">
               <div className="absolute inset-0 bg-gopher-blue/20 blur-[100px] rounded-full" />
