@@ -157,16 +157,40 @@ func HandleSocketPayloadEvents(client *Client, msg WSMessage) {
 				ToUserID:   toUserID,
 				Type:       msgType,
 				TempID:     tempID,
+				CreatedAt:  time.Now(),
 			}
-			StoreNewMessages(messagePacket)
 
 			// === LOGIC START ===
 			if toUserID == "global" {
-				// 1. GLOBAL CHAT: Broadcast to ALL users
-				// Use empty string as TargetID to signal broadcast
-				globalPayload := createWSMessage("message-response", messagePacket, "")
+				// 1. GLOBAL CHAT: Redis Only
+				
+				// Broadcast immediately
+				globalPayload := createWSMessage("message-response", messagePacket, "") 
 				PublishMessage(globalPayload)
-			} else {
+				
+				// Store in Redis List (JSON)
+				ctx := context.Background()
+				jsonMsg, _ := json.Marshal(messagePacket)
+				
+				// Push to head of list
+				config.RedisClient.LPush(ctx, "global_chat_history", jsonMsg)
+				
+				// Trim to keep only last 50 messages
+				config.RedisClient.LTrim(ctx, "global_chat_history", 0, 49)
+				
+			} else if toUserID == "random" || isRandomChat(toUserID) { 
+				// 2. RANDOM CHAT: No Storage, Just Relay
+				// You need logic to find the partner's ID based on your session
+				// For now, assuming 'toUserID' is the actual partner's ID provided by frontend
+				
+				responsePayload := createWSMessage("message-response", messagePacket, toUserID)
+				PublishMessage(responsePayload)
+				
+				// Don't store in DB!
+				
+			}else {
+				StoreNewMessages(messagePacket)		// DB Call
+
 				// 1. Send Chat Message via Redis (Targeted)
 				responsePayload := createWSMessage("message-response", messagePacket, toUserID)
 				PublishMessage(responsePayload)

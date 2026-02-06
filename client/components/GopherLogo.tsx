@@ -263,3 +263,17 @@ export const SleepingGopher = () => {
     </div>
   );
 };
+
+export const PeekingGopher = ({ isTyping }: { isTyping: boolean }) => {
+  return (
+    <div className="absolute left-4 bottom-full z-0 overflow-hidden w-24 h-20 pointer-events-none">
+      <motion.div
+        initial={{ y: 100 }}
+        animate={{ y: isTyping ? 0 : 100 }}
+        transition={{ type: "spring", stiffness: 200, damping: 20 }}
+      >
+        <GopherLogo size={80} />
+      </motion.div>
+    </div>
+  );
+};

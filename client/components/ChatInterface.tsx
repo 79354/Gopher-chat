@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useChatStore, Message } from '@/store/chatStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { api } from '@/lib/api';
-import { GopherLogo, SleepingGopher, DiggingGopher } from '@/components/GopherLogo';
+import { GopherLogo, SleepingGopher, DiggingGopher, PeekingGopher } from '@/components/GopherLogo';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import {
   Send,
@@ -579,6 +579,7 @@ export default function ChatInterface() {
 
             {/* Input Area */}
             <div className="p-4 bg-white/5 backdrop-blur-2xl border-t border-white/10 relative z-30">
+              <PeekingGopher isTyping={isRecipientTyping} />
               <AnimatePresence>
                 {showEmojiPicker && (
                   <motion.div

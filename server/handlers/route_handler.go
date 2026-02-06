@@ -248,74 +248,87 @@ func GetMessagesHandler() gin.HandlerFunc {
 	}
 }
 
+func GetGlobalChatHistory() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        ctx := context.Background()
+        
+        // Fetch last 50 messages
+        // LRange 0 -1 gets everything, but we trimmed it to 50
+        messagesJSON, err := config.RedisClient.LRange(ctx, "global_chat_history", 0, -1).Result()
+        if err != nil {
+            c.JSON(500, APIResponse{Message: "Error fetching global chat"})
+            return
+        }
+        
+        var history []MessagePayload
+        // Redis stores LPush (newest first), usually chat wants oldest first
+        // We iterate backwards to reverse it, or handle in frontend
+        for i := len(messagesJSON) - 1; i >= 0; i-- {
+            var msg MessagePayload
+            json.Unmarshal([]byte(messagesJSON[i]), &msg)
+            history = append(history, msg)
+        }
+        
+        c.JSON(200, APIResponse{
+            Code: 200, 
+            Response: history,
+        })
+    }
+}
+
+
 var (
 	randomQueue = make(map[string]chan string)
 	queueMutex  sync.Mutex
 )
 
+// Improved Random Handler
 func JoinRandomChatHandler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		userID := c.Param("userID")
-
-		queueMutex.Lock()
-		
-		// 1. Check if anyone else is waiting
-		for waitingID, ch := range randomQueue {
-			if waitingID != userID {
-				// Match Found! Remove waiter from queue
-				delete(randomQueue, waitingID)
-				queueMutex.Unlock()
-
-				// Notify the waiting user (send them MY userID)
-				select {
-				case ch <- userID:
-				default:
-					// Waiter disconnected
-				}
-
-				// Respond to ME (the Joiner) with THEIR userID
-				c.JSON(http.StatusOK, APIResponse{
-					Code:    http.StatusOK,
-					Message: "Match found",
-					Response: map[string]string{
-						"matchID": waitingID,
-						"role":    "initiator",
-					},
-				})
-				return
-			}
-		}
-
-		// 2. No match found, add myself to queue
-		myChan := make(chan string)
-		randomQueue[userID] = myChan
-		queueMutex.Unlock()
-
-		// 3. Wait for a match, timeout, or disconnect
-		select {
-		case partnerID := <-myChan:
-			c.JSON(http.StatusOK, APIResponse{
-				Code:    http.StatusOK,
-				Message: "Match found",
-				Response: map[string]string{
-					"matchID": partnerID,
-					"role":    "peer",
-				},
-			})
-		case <-time.After(30 * time.Second): // Timeout after 30s
-			queueMutex.Lock()
-			delete(randomQueue, userID)
-			queueMutex.Unlock()
-			c.JSON(http.StatusRequestTimeout, APIResponse{
-				Code:    408,
-				Message: "No match found, try again",
-			})
-		case <-c.Request.Context().Done(): // User closed browser
-			queueMutex.Lock()
-			delete(randomQueue, userID)
-			queueMutex.Unlock()
-		}
-	}
+    return func(c *gin.Context) {
+        userID := c.Param("userID")
+        
+        // Use a select with timeout
+        timeout := time.After(20 * time.Second)
+        
+        queueMutex.Lock()
+        // Check for match...
+        for waitingID, ch := range randomQueue {
+            if waitingID != userID {
+                delete(randomQueue, waitingID)
+                queueMutex.Unlock()
+                
+                ch <- userID // Wake up the waiter
+                
+                c.JSON(200, APIResponse{
+                    Code: 200, 
+                    Response: map[string]string{"matchID": waitingID, "role": "initiator"}
+                })
+                return
+            }
+        }
+        
+        // No match, enqueue self
+        myChan := make(chan string)
+        randomQueue[userID] = myChan
+        queueMutex.Unlock()
+        
+        select {
+        case partnerID := <-myChan:
+            c.JSON(200, APIResponse{
+                Code: 200, 
+                Response: map[string]string{"matchID": partnerID, "role": "peer"}
+            })
+        case <-timeout:
+            queueMutex.Lock()
+            delete(randomQueue, userID)
+            queueMutex.Unlock()
+            c.JSON(408, APIResponse{Code: 408, Message: "No active users found. Try again!"})
+        case <-c.Request.Context().Done(): // Client cancelled/closed tab
+            queueMutex.Lock()
+            delete(randomQueue, userID)
+            queueMutex.Unlock()
+        }
+    }
 }
 
 // NEW SOCIAL GRAPH HANDLERS
@@ -407,4 +420,25 @@ func GetFriendListHandler() gin.HandlerFunc {
 			Code: http.StatusOK, Response: friends,
 		})
 	}
+}
+
+func DeleteMessagesHandler() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        var req struct {
+            MessageIDs []string `json:"messageIDs"`
+        }
+        if err := c.ShouldBindJSON(&req); err != nil {
+            c.JSON(400, APIResponse{Message: "Invalid payload"})
+            return
+        }
+        
+        userID := c.Param("userID") // From middleware or param
+        
+        if err := DeleteMessages(req.MessageIDs, userID); err != nil {
+            c.JSON(500, APIResponse{Message: "Failed to delete"})
+            return
+        }
+        
+        c.JSON(200, APIResponse{Message: "Messages deleted"})
+    }
 }

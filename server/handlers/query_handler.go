@@ -353,3 +353,27 @@ func GetFriendList(userID string) ([]UserResponse, error) {
 	}
 	return friends, nil
 }
+
+func DeleteMessages(messageIDs []string, userID string) error {
+    // Convert string IDs to ObjectIDs
+    var objectIDs []primitive.ObjectID
+    for _, id := range messageIDs {
+        oid, _ := primitive.ObjectIDFromHex(id)
+        objectIDs = append(objectIDs, oid)
+    }
+
+    collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("messages")
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    // Delete messages where ID matches AND (fromUserID == userID OR toUserID == userID)
+    // This allows deleting messages you sent OR received (WhatsApp style "Delete for me" logic is complex, this is "Delete" logic)
+    _, err := collection.DeleteMany(ctx, bson.M{
+        "_id": bson.M{"$in": objectIDs},
+        "$or": []bson.M{
+            {"fromUserID": userID},
+            // {"toUserID": userID}, // Uncomment to allow deleting received messages too
+        },
+    })
+    return err
+}
