@@ -17,6 +17,9 @@ type UserDetails struct {
 
 type Message struct {
 	ID         string    `json:"id" bson:"_id,omitempty"`
+    TempID     string    `json:"tempId,omitempty" bson:"-"` // Virtual field for ACK
+    Status     string    `json:"status" bson:"status"`      // sending, sent, delivered, read
+    Type       string    `json:"type" bson:"type"`          // text, image, file, system
 	Message    string    `json:"message" binding:"required" bson:"message"`
 	ToUserID   string    `json:"toUserID" binding:"required" bson:"toUserID"`
 	FromUserID string    `json:"fromUserID" binding:"required" bson:"fromUserID"`

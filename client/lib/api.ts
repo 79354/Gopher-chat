@@ -39,6 +39,27 @@ export const api = {
     );
     return response.data.response; // UNWRAP HERE
   },
+
+  sendFriendRequest: async (targetUsername: string): Promise<boolean> => {
+    const response = await axios.post(
+      `${API_BASE_URL}/api/friends/request/${targetUsername}`
+    );
+    return response.data.response === true;
+  },
+
+  acceptFriendRequest: async (requesterID: string): Promise<boolean> => {
+    const response = await axios.post(
+      `${API_BASE_URL}/api/friends/accept/${requesterID}`
+    );
+    return response.data.response === true;
+  },
+
+  getFriends: async () => {
+    const response = await axios.get(
+      `${API_BASE_URL}/api/friends/list`
+    );
+    return response.data.response;
+  },
 };
 
 export const getWebSocketURL = (userID: string): string => {

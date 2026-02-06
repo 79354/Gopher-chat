@@ -46,13 +46,19 @@ export const useWebSocket = (userID: string | null) => {
           ? payload.toUserID
           : payload.fromUserID;
 
+      // When we receive a message from the server:
+      // 1. If it's an ACK for our own message, this will update the status to 'sent' (matched by tempId)
+      // 2. If it's a new message from someone else, it will be added
       addMessage(otherUserID, {
+        id: payload.id,         // Ensure backend sends this real ID
+        tempId: payload.tempId, // Ensure backend echoes this back
         toUserID: payload.toUserID,
         fromUserID: payload.fromUserID,
         message: payload.message,
         timestamp: payload.createdAt
           ? new Date(payload.createdAt).getTime()
           : Date.now(),
+        status: 'sent', // Messages coming from server are confirmed 'sent'
       });
     },
     [addMessage, currentUser]
@@ -112,31 +118,35 @@ export const useWebSocket = (userID: string | null) => {
     }
   }, []);
 
-  const sendMessage = useCallback(
-    (toUserID: string, message: string) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-        console.error('WebSocket is not connected');
-        return;
+  const sendMessage = useCallback((toUserID: string, content: string) => {
+    if (!currentUser || !wsRef.current) return;
+
+    // 1. Optimistic Update
+    const tempId = crypto.randomUUID();
+
+    const optimisticMessage: Message = {
+      id: tempId, // Use tempId as ID initially
+      tempId: tempId,
+      toUserID,
+      fromUserID: currentUser.userID,
+      message: content,
+      timestamp: Date.now(),
+      status: 'sending'
+    };
+
+    // Immediately show in UI
+    addMessage(toUserID, optimisticMessage);
+
+    // 2. Send to Socket
+    wsRef.current.send(JSON.stringify({
+      type: 'message',
+      payload: {
+        ...optimisticMessage,
+        // We strictly send what the server expects, plus tempId for ACK
+        tempId
       }
-
-      if (!currentUser) {
-        console.error('No current user');
-        return;
-      }
-
-      const payload: WSMessage = {
-        type: 'message',
-        payload: {
-          toUserID,
-          fromUserID: currentUser.userID,
-          message,
-        },
-      };
-
-      wsRef.current.send(JSON.stringify(payload));
-    },
-    [currentUser]
-  );
+    }));
+  }, [currentUser, addMessage]);
 
   useEffect(() => {
     if (userID) {
