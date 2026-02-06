@@ -1,7 +1,10 @@
-# Ignore
-package.json linguist-detectable=false
-package-lock.json linguist-detectable=false
+# Ignore generated/build output
+dist/** linguist-generated=true
+build/** linguist-generated=true
 
-# *.js linguist-detectable=false
+# De-emphasize TypeScript
+*.ts linguist-vendored=true
+*.tsx linguist-vendored=true
 
-*.go linguist-detectable=true
+# Ensure Go is counted
+*.go linguist-language=Go
