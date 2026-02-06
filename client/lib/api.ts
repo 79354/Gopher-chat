@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8080';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
 export interface LoginPayload {
   username: string;
@@ -13,37 +13,34 @@ export interface AuthResponse {
 }
 
 export const api = {
-  // Auth endpoints
   login: async (payload: LoginPayload): Promise<AuthResponse> => {
-    const response = await axios.post(`${API_BASE_URL}/login`, payload);
-    return response.data;
+    const response = await axios.post(`${API_BASE_URL}/api/auth/login`, payload);
+    return response.data.response; // UNWRAP HERE
   },
 
   register: async (payload: LoginPayload): Promise<AuthResponse> => {
-    const response = await axios.post(`${API_BASE_URL}/registration`, payload);
-    return response.data;
+    const response = await axios.post(`${API_BASE_URL}/api/auth/register`, payload);
+    return response.data.response; // UNWRAP HERE
   },
 
-  // Session check
   checkSession: async (userID: string): Promise<boolean> => {
     try {
-      await axios.get(`${API_BASE_URL}/UserSessionCheck/${userID}`);
-      return true;
+      const response = await axios.get(`${API_BASE_URL}/api/user/session/${userID}`);
+      // Check the actual boolean in the response body
+      return response.data.response === true;
     } catch {
       return false;
     }
   },
 
-  // Chat history
   getConversation: async (toUserID: string, fromUserID: string) => {
     const response = await axios.get(
-      `${API_BASE_URL}/getConversation/${toUserID}/${fromUserID}`
+      `${API_BASE_URL}/api/messages/conversation/${toUserID}/${fromUserID}`
     );
-    return response.data;
+    return response.data.response; // UNWRAP HERE
   },
 };
 
-// WebSocket URL generator
 export const getWebSocketURL = (userID: string): string => {
   return `ws://localhost:8080/ws/${userID}`;
 };

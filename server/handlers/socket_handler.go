@@ -315,3 +315,14 @@ func BroadcastToEveryoneExceptme(lobby *Lobby, payload WSMessage, myUserID strin
         }
     }
 }
+
+func BroadcastLocal(lobby *Lobby, payload WSMessage) {
+	// If TargetID is specified, send only to that user
+	if payload.TargetID != "" {
+		EmitToClient(lobby, payload, payload.TargetID)
+		return
+	}
+
+	// Otherwise broadcast to everyone on this server
+	BroadcastToEveryone(lobby, payload)
+}

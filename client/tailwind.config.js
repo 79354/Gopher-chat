@@ -8,11 +8,15 @@ module.exports = {
   theme: {
     extend: {
       colors: {
+        border: "rgba(255, 255, 255, 0.1)",
+
+        // Keep your existing gopher colors
         gopher: {
           blue: '#00ADD8',
           purple: '#7C3AED',
         },
       },
+      // Keep all your existing animations
       animation: {
         'shimmer': 'shimmer 2s linear infinite',
         'bounce-slow': 'bounce 3s ease-in-out infinite',
