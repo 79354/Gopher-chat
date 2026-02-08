@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  # --- 1. Main Chat Server ---
+  server:
+    build: ./server
+    container_name: gopher-server
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - MONGODB_URI=mongodb://mongo:27017
+      - MONGODB_DATABASE=gopherchat
+      - REDIS_URL=redis:6379
+      - CLIENT_URL=http://localhost:3000
+    depends_on:
+      - mongo
+      - redis
+    networks:
+      - gopher-net
+
+  # --- 2. Video Microservice ---
+  video-service:
+    build: ./video-service
+    container_name: gopher-video
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - REDIS_URL=redis:6379
+      - ALLOWED_ORIGINS=http://localhost:3000
+    depends_on:
+      - redis
+    networks:
+      - gopher-net
+
+  # --- 3. Databases ---
+  mongo:
+    image: mongo:latest
+    container_name: gopher-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - gopher-net
+
+  redis:
+    image: redis:alpine
+    container_name: gopher-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - gopher-net
+
+  # --- 4. Frontend (Optional: usually better to run locally for dev) ---
+  # client:
+  #   build: ./client
+  #   ports:
+  #     - "3000:3000"
+  #   networks:
+  #     - gopher-net
+
+networks:
+  gopher-net:
+    driver: bridge
+
+volumes:
+  mongo_data:
