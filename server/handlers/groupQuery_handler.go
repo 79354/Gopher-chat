@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"time"
 
@@ -349,4 +351,91 @@ func NotifyGroupCall(groupID, callerID, roomID string) {
 		Message:    caller.Username + " started a video call",
 		Type:       "call-invite",
 	})
+}
+
+// BroadcastQueue is a channel to send messages from HTTP handlers to the WebSocket Hub.
+// The main server.go will listen to this channel.
+var BroadcastQueue = make(chan WSMessage, 1000)
+
+// BroadcastGroupMessage sends a real-time message to all online members of a group
+func BroadcastGroupMessage(groupID, fromUserID, message, msgType string) {
+	// 1. Get Group Details to find members
+	group, err := GetGroupByID(groupID)
+	if err != nil {
+		log.Printf("Failed to broadcast: group %s not found", groupID)
+		return
+	}
+
+	// 2. Prepare the payload
+	payload := GroupMessagePayload{
+		GroupID:    groupID,
+		FromUserID: fromUserID,
+		Message:    message,
+		Type:       msgType,
+		CreatedAt:  time.Now(),
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("Failed to marshal broadcast payload: %v", err)
+		return
+	}
+
+	// 3. Send to each member
+	// Note: In a production app with Redis, we would publish to a "group:ID" channel.
+	// Here, we iterate and send to the WebSocket Hub for each user.
+	for _, member := range group.Members {
+		// Don't echo back to sender if you want to save bandwidth
+		// (though usually good for confirming receipt)
+		// if member.UserID == fromUserID { continue }
+
+		BroadcastQueue <- WSMessage{
+			Type:     "group-message",
+			Payload:  payloadBytes,
+			TargetID: member.UserID, // The Hub will find the connection for this UserID
+		}
+	}
+}
+
+// NotifyGroupCall alerts all group members that a video call has started
+func NotifyGroupCall(groupID, callerID, roomID string) {
+	group, err := GetGroupByID(groupID)
+	if err != nil {
+		log.Println("Failed to notify call: group not found")
+		return
+	}
+
+	caller := GetUserByUserID(callerID)
+
+	// Prepare the system message payload
+	// We reuse the message structure but with a specific type 'call-invite'
+	// The frontend ChatInterface.tsx listens for 'call-invite'
+	payload := GroupMessagePayload{
+		GroupID:    groupID,
+		FromUserID: callerID,
+		Message:    roomID, // The payload message is the RoomID
+		Type:       "call-invite",
+		CreatedAt:  time.Now(),
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		log.Println("Error marshalling call notification")
+		return
+	}
+
+	// Notify all members except the caller
+	for _, member := range group.Members {
+		if member.UserID == callerID {
+			continue
+		}
+
+		BroadcastQueue <- WSMessage{
+			Type:     "group-message", // We wrap it as a group message so the client handles it easily
+			Payload:  payloadBytes,
+			TargetID: member.UserID,
+		}
+	}
+
+	log.Printf("Video call notification sent to group %s for room %s", groupID, roomID)
 }
