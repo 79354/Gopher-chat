@@ -19,7 +19,7 @@ import (
 func RenderHome() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, APIResponse{
-			Code:     http.StatusOK,``
+			Code:     http.StatusOK,
 			Status:   http.StatusText(http.StatusOK),
 			Message:  constants.APIWelcomeMessage,
 			Response: nil,
@@ -239,9 +239,9 @@ func GetMessagesHandler() gin.HandlerFunc {
 		if err != nil || page < 1 {
 			page = 1
 		}
-		
+
 		conversations := GetConversationBetweenTwoUsers(toUserID, fromUserID, int64(page))
-		
+
 		c.JSON(http.StatusOK, APIResponse{
 			Code:     http.StatusOK,
 			Status:   http.StatusText(http.StatusOK),
@@ -252,33 +252,32 @@ func GetMessagesHandler() gin.HandlerFunc {
 }
 
 func GetGlobalChatHistory() gin.HandlerFunc {
-    return func(c *gin.Context) {
-        ctx := context.Background()
-        
-        // Fetch last 50 messages
-        // LRange 0 -1 gets everything, but we trimmed it to 50
-        messagesJSON, err := config.RedisClient.LRange(ctx, "global_chat_history", 0, -1).Result()
-        if err != nil {
-            c.JSON(500, APIResponse{Message: "Error fetching global chat"})
-            return
-        }
-        
-        var history []MessagePayload
-        // Redis stores LPush (newest first), usually chat wants oldest first
-        // We iterate backwards to reverse it, or handle in frontend
-        for i := len(messagesJSON) - 1; i >= 0; i-- {
-            var msg MessagePayload
-            json.Unmarshal([]byte(messagesJSON[i]), &msg)
-            history = append(history, msg)
-        }
-        
-        c.JSON(200, APIResponse{
-            Code: 200, 
-            Response: history,
-        })
-    }
-}
+	return func(c *gin.Context) {
+		ctx := context.Background()
 
+		// Fetch last 50 messages
+		// LRange 0 -1 gets everything, but we trimmed it to 50
+		messagesJSON, err := config.RedisClient.LRange(ctx, "global_chat_history", 0, -1).Result()
+		if err != nil {
+			c.JSON(500, APIResponse{Message: "Error fetching global chat"})
+			return
+		}
+
+		var history []MessagePayload
+		// Redis stores LPush (newest first), usually chat wants oldest first
+		// We iterate backwards to reverse it, or handle in frontend
+		for i := len(messagesJSON) - 1; i >= 0; i-- {
+			var msg MessagePayload
+			json.Unmarshal([]byte(messagesJSON[i]), &msg)
+			history = append(history, msg)
+		}
+
+		c.JSON(200, APIResponse{
+			Code:     200,
+			Response: history,
+		})
+	}
+}
 
 var (
 	randomQueue = make(map[string]chan string)
@@ -287,51 +286,51 @@ var (
 
 // Improved Random Handler
 func JoinRandomChatHandler() gin.HandlerFunc {
-    return func(c *gin.Context) {
-        userID := c.Param("userID")
-        
-        // Use a select with timeout
-        timeout := time.After(20 * time.Second)
-        
-        queueMutex.Lock()
-        // Check for match...
-        for waitingID, ch := range randomQueue {
-            if waitingID != userID {
-                delete(randomQueue, waitingID)
-                queueMutex.Unlock()
-                
-                ch <- userID // Wake up the waiter
-                
-                c.JSON(200, APIResponse{
-                    Code: 200, 
-                    Response: map[string]string{"matchID": waitingID, "role": "initiator"},
-                })
-                return
-            }
-        }
-        
-        // No match, enqueue self
-        myChan := make(chan string)
-        randomQueue[userID] = myChan
-        queueMutex.Unlock()
-        
-        select {
-        case partnerID := <-myChan:
-            c.JSON(200, APIResponse{
-                Code: 200, 
-                Response: map[string]string{"matchID": partnerID, "role": "peer"},
-            })
-        case <-timeout:
-            queueMutex.Lock()
-            delete(randomQueue, userID)
-            queueMutex.Unlock()
-            c.JSON(408, APIResponse{Code: 408, Message: "No active users found. Try again!"})
-        case <-c.Request.Context().Done(): // Client cancelled/closed tab
-            queueMutex.Lock()
-            delete(randomQueue, userID)
-            queueMutex.Unlock()
-        }
-    }
+	return func(c *gin.Context) {
+		userID := c.Param("userID")
+
+		// Use a select with timeout
+		timeout := time.After(20 * time.Second)
+
+		queueMutex.Lock()
+		// Check for match...
+		for waitingID, ch := range randomQueue {
+			if waitingID != userID {
+				delete(randomQueue, waitingID)
+				queueMutex.Unlock()
+
+				ch <- userID // Wake up the waiter
+
+				c.JSON(200, APIResponse{
+					Code:     200,
+					Response: map[string]string{"matchID": waitingID, "role": "initiator"},
+				})
+				return
+			}
+		}
+
+		// No match, enqueue self
+		myChan := make(chan string)
+		randomQueue[userID] = myChan
+		queueMutex.Unlock()
+
+		select {
+		case partnerID := <-myChan:
+			c.JSON(200, APIResponse{
+				Code:     200,
+				Response: map[string]string{"matchID": partnerID, "role": "peer"},
+			})
+		case <-timeout:
+			queueMutex.Lock()
+			delete(randomQueue, userID)
+			queueMutex.Unlock()
+			c.JSON(408, APIResponse{Code: 408, Message: "No active users found. Try again!"})
+		case <-c.Request.Context().Done(): // Client cancelled/closed tab
+			queueMutex.Lock()
+			delete(randomQueue, userID)
+			queueMutex.Unlock()
+		}
+	}
 }
 
 // NEW SOCIAL GRAPH HANDLERS
@@ -426,31 +425,31 @@ func GetFriendListHandler() gin.HandlerFunc {
 }
 
 func DeleteMessagesHandler() gin.HandlerFunc {
-    return func(c *gin.Context) {
-        var req struct {
-            MessageIDs []string `json:"messageIDs"`
-        }
-        if err := c.ShouldBindJSON(&req); err != nil {
-            c.JSON(400, APIResponse{Message: "Invalid payload"})
-            return
-        }
-        
-        userID := c.Param("userID") // From middleware or param
-        
-        if err := DeleteMessages(req.MessageIDs, userID); err != nil {
-            c.JSON(500, APIResponse{Message: "Failed to delete"})
-            return
-        }
-        
-        c.JSON(200, APIResponse{Message: "Messages deleted"})
-    }
+	return func(c *gin.Context) {
+		var req struct {
+			MessageIDs []string `json:"messageIDs"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, APIResponse{Message: "Invalid payload"})
+			return
+		}
+
+		userID := c.Param("userID") // From middleware or param
+
+		if err := DeleteMessages(req.MessageIDs, userID); err != nil {
+			c.JSON(500, APIResponse{Message: "Failed to delete"})
+			return
+		}
+
+		c.JSON(200, APIResponse{Message: "Messages deleted"})
+	}
 }
 
 func isRandomChat(userID string) bool {
-    // For now, we simply check if the ID is explicitly "random".
-    // Since random chat matches assign a real partner ID, 
-    // this safeguards the initial join request or specific logic.
-    return userID == "random"
+	// For now, we simply check if the ID is explicitly "random".
+	// Since random chat matches assign a real partner ID,
+	// this safeguards the initial join request or specific logic.
+	return userID == "random"
 }
 
 func RegisterGroupRoutes(router *gin.Engine) {
@@ -458,29 +457,29 @@ func RegisterGroupRoutes(router *gin.Engine) {
 	groupRoutes := router.Group("/api/groups")
 	{
 		// Create a new group
-		groupRoutes.POST("/create", handlers.CreateGroup())
+		groupRoutes.POST("/create", CreateGroup())
 
 		// Get all groups for a user
-		groupRoutes.GET("/user/:userID", handlers.GetUserGroups())
+		groupRoutes.GET("/user/:userID", GetUserGroups())
 
 		// Get group details
-		groupRoutes.GET("/:groupID", handlers.GetGroupDetails())
+		groupRoutes.GET("/:groupID", GetGroupDetails())
 
 		// Member management
-		groupRoutes.POST("/members/add", handlers.AddGroupMember())
-		groupRoutes.DELETE("/:groupID/members/:userID", handlers.RemoveGroupMember())
+		groupRoutes.POST("/members/add", AddGroupMember())
+		groupRoutes.DELETE("/:groupID/members/:userID", RemoveGroupMember())
 
 		// Update group settings
-		groupRoutes.PUT("/update", handlers.UpdateGroupSettings())
+		groupRoutes.PUT("/update", UpdateGroupSettings())
 
 		// Delete group
-		groupRoutes.DELETE("/:groupID", handlers.DeleteGroup())
+		groupRoutes.DELETE("/:groupID", DeleteGroup())
 
 		// Group messages
-		groupRoutes.GET("/:groupID/messages", handlers.GetGroupMessages())
-		groupRoutes.POST("/messages/send", handlers.SendGroupMessage())
+		groupRoutes.GET("/:groupID/messages", GetGroupMessages())
+		groupRoutes.POST("/messages/send", SendGroupMessage())
 
 		// Video calling
-		groupRoutes.POST("/video-call/start", handlers.StartGroupVideoCall())
+		groupRoutes.POST("/video-call/start", StartGroupVideoCall())
 	}
 }

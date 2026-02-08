@@ -40,10 +40,19 @@ func HandleWebRTCSignaling(c *websocket.Conn) {
 		return
 	}
 
+	meta := redis.GetRoomMetadata(roomId)
+
+	// If map is empty, the room is "new" (implicit creation)
+	if len(meta) == 0 {
+		log.Printf("Room %s does not exist. Initializing implicitly for user %s", roomId, userId)
+		// Auto-initialize the room with the connecting user as 'creator'
+		redis.InitializeRoom(roomId, userId)
+	}
+
 	log.Printf("User %s joining room %s", userId, roomId)
 
 	// Add user to room
-	peer := addUserToRoom(roomId, userId, c)
+	_ = addUserToRoom(roomId, userId, c)
 	defer removeUserFromRoom(roomId, userId)
 
 	// Add to Redis tracking

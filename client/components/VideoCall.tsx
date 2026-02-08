@@ -1,4 +1,3 @@
-[cite_start][cite: 1187, 1188]
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -36,7 +35,7 @@ export default function VideoCall({
     const sendICERef = useRef<((targetId: string, candidate: RTCIceCandidateInit) => void) | null>(null);
 
     // --- 1. Define Signaling Handlers (Socket -> WebRTC) ---
-    
+
     const handleIncomingOffer = useCallback(async (peerId: string, offer: RTCSessionDescriptionInit) => {
         // When we receive an offer: Create Answer -> Send Answer
         // Note: createAnswer in useWebRTC should handle setting remote desc + creating answer + setting local desc
@@ -78,12 +77,12 @@ export default function VideoCall({
     } = useWebRTC(roomId, userId);
 
     // Note: We are passing our handlers to the socket hook
-    const { 
-        connectionStatus, 
+    const {
+        connectionStatus,
         participants,
         sendOffer,
         sendAnswer,
-        sendICECandidate 
+        sendICECandidate
     } = useVideoSocket(
         roomId,
         userId,
@@ -237,7 +236,7 @@ export default function VideoCall({
                     )}
 
                     {/* Local Video (Picture-in-Picture) */}
-                    <motion.div 
+                    <motion.div
                         className="absolute bottom-24 right-4 w-48 h-36 bg-slate-800 rounded-lg overflow-hidden border-2 border-white/20 shadow-2xl z-20"
                         drag
                         dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}

@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"time"
 
@@ -309,7 +312,7 @@ func GetGroupMessageHistory(groupID string, page string) ([]GroupMessage, error)
 
 	// Basic pagination (implement logic to convert page string to offset)
 	// For now, let's just return the last 50 messages
-	opts := options.Find().SetSort(bson.D{{"createdAt", 1}}).SetLimit(50)
+	opts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: 1}}).SetLimit(50)
 
 	cursor, err := collection.Find(ctx, bson.M{"groupID": groupID}, opts)
 	if err != nil {
@@ -325,12 +328,45 @@ func GetGroupMessageHistory(groupID string, page string) ([]GroupMessage, error)
 	return messages, nil
 }
 
-// InitiateGroupVideoCall is a placeholder for video integration logic
-// In a real microservices arch, this might contact the video-service via HTTP
+// InitiateGroupVideoCall contacts the Video Service to create a room
 func InitiateGroupVideoCall(groupID, callerID string) (string, error) {
-	// For now, we just generate a Room ID based on the Group ID
-	// The frontend will then connect to the video-service with this ID
-	return "room_" + groupID, nil
+	// 1. Define the payload expected by Video Service
+	requestBody, err := json.Marshal(map[string]string{
+		"roomId":    "room_" + groupID, // Consistent naming
+		"creatorId": callerID,
+		"groupId":   groupID,
+		"type":      "group",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	// 2. Get Video Service URL (Default to localhost:4000 if not in .env)
+	videoServiceURL := os.Getenv("VIDEO_SERVICE_URL")
+	if videoServiceURL == "" {
+		videoServiceURL = "http://localhost:4000"
+	}
+
+	// 3. Make the HTTP Request
+	resp, err := http.Post(videoServiceURL+"/api/rooms/create", "application/json", bytes.NewBuffer(requestBody))
+	if err != nil {
+		log.Printf("Failed to contact video service: %v", err)
+		return "", errors.New("video service unavailable")
+	}
+	defer resp.Body.Close()
+
+	// 4. Check for success (200 OK)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("video service returned status: %d", resp.StatusCode)
+	}
+
+	// 5. Parse the JSON response to get the confirmed Room ID
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return "", err
+	}
+
+	return res["roomId"].(string), nil
 }
 
 // BroadcastQueue is a channel to send messages from HTTP handlers to the WebSocket Hub.

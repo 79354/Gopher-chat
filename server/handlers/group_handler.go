@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"regexp"
+	"time"
 
 	"chat-app/constants"
 
@@ -284,7 +286,7 @@ func SendGroupMessage() gin.HandlerFunc {
 		}
 
 		// Broadcast to group members via WebSocket
-		BroadcastGroupMessage(req.GroupID, req.FromUserID, req.Message)
+		BroadcastGroupMessage(req.GroupID, req.FromUserID, req.Message, req.Type)
 
 		c.JSON(http.StatusOK, APIResponse{
 			Code:     http.StatusOK,
@@ -331,6 +333,48 @@ func StartGroupVideoCall() gin.HandlerFunc {
 				"groupId": req.GroupID,
 			},
 		})
+	}
+}
+
+func HandleGroupMessageEvent(client *Client, msg WSMessage) {
+	var payloadData map[string]string
+	if err := json.Unmarshal(msg.Payload, &payloadData); err != nil {
+		return
+	}
+
+	groupID := payloadData["groupID"]
+	fromUserID := payloadData["fromUserID"]
+	message := payloadData["message"]
+	msgType := payloadData["type"]
+	if msgType == "" {
+		msgType = "text"
+	}
+
+	messagePacket := GroupMessagePayload{
+		GroupID:    groupID,
+		FromUserID: fromUserID,
+		Message:    message,
+		Type:       msgType,
+		CreatedAt:  time.Now(),
+	}
+
+	// FIX: Use underscore (_) to ignore unused msgID
+	_, _ = StoreGroupMessage(GroupMessageRequest{
+		GroupID:    groupID,
+		FromUserID: fromUserID,
+		Message:    message,
+		Type:       msgType,
+	})
+
+	group, err := GetGroupByID(groupID)
+	if err != nil {
+		return
+	}
+
+	for _, member := range group.Members {
+		// FIX: Use 'member.UserID' to target the specific user
+		responsePayload := createWSMessage("group-message-response", messagePacket, member.UserID)
+		PublishMessage(responsePayload)
 	}
 }
 

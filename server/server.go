@@ -107,7 +107,7 @@ func setupRoutes(router *gin.Engine) {
 			friends.GET("/list/:userID", handlers.GetFriendListHandler())
 		}
 
-		groupRoutes := router.Group("/api/groups")
+		groupRoutes := api.Group("/api/groups")
 		{
 			groupRoutes.POST("/create", handlers.CreateGroup())
 			groupRoutes.GET("/user/:userID", handlers.GetUserGroups())
@@ -120,49 +120,5 @@ func setupRoutes(router *gin.Engine) {
 			groupRoutes.POST("/messages/send", handlers.SendGroupMessage())
 			groupRoutes.POST("/video-call/start", handlers.StartGroupVideoCall())
 		}
-	}
-}
-
-func HandleGroupMessageEvent(client *Client, msg WSMessage) {
-	var payloadData map[string]string
-	if err := json.Unmarshal(msg.Payload, &payloadData); err != nil {
-		return
-	}
-
-	groupID := payloadData["groupID"]
-	fromUserID := payloadData["fromUserID"]
-	message := payloadData["message"]
-	msgType := payloadData["type"]
-	if msgType == "" {
-		msgType = "text"
-	}
-
-	// Store message in database
-	messagePacket := GroupMessagePayload{
-		GroupID:    groupID,
-		FromUserID: fromUserID,
-		Message:    message,
-		Type:       msgType,
-		CreatedAt:  time.Now(),
-	}
-
-	msgID, _ := StoreGroupMessage(GroupMessageRequest{
-		GroupID:    groupID,
-		FromUserID: fromUserID,
-		Message:    message,
-		Type:       msgType,
-	})
-
-	// Broadcast to all group members
-	group, err := GetGroupByID(groupID)
-	if err != nil {
-		return
-	}
-
-	responsePayload := createWSMessage("group-message-response", messagePacket, "")
-
-	for _, member := range group.Members {
-		// Send to each member via Redis pub/sub
-		PublishMessage(responsePayload)
 	}
 }

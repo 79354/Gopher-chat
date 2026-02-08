@@ -63,16 +63,23 @@ func DeleteRoom(c *fiber.Ctx) error {
 	}
 
 	// 1. Close local websocket connections for this room
-	// We access the shared 'rooms' map from ws.go (same package)
+	var peersToClose []*Peer
+
 	roomsMutex.Lock()
 	if peers, exists := rooms[roomId]; exists {
+		// Collect peers to close later
 		for _, peer := range peers {
-			// peer.Conn is the websocket connection
-			peer.Conn.Close()
+			peersToClose = append(peersToClose, peer)
 		}
+		// Remove from map IMMEDIATELY so removeUserFromRoom won't find it
 		delete(rooms, roomId)
 	}
-	roomsMutex.Unlock()
+	roomsMutex.Unlock() // Unlock BEFORE closing connections
+
+	// Now close connections (safe from deadlock)
+	for _, peer := range peersToClose {
+		peer.Conn.Close()
+	}
 
 	// 2. Delete from Redis
 	redis.DeleteRoom(roomId)

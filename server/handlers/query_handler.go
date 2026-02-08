@@ -152,6 +152,9 @@ func GetAllOnlineUsers(userID string) []UserResponse {
 			"$ne": docID, // excludes the user itself
 		},
 	})
+	if queryError != nil {
+		return onlineUsers
+	}
 	defer cursor.Close(ctx)
 
 	if queryError != nil {
@@ -211,10 +214,12 @@ func GetConversationBetweenTwoUsers(toUser, fromUser string, page int64) []Messa
 		},
 	}
 
+	// FIX START: Initialize and chain methods on the SAME variable
 	findOptions := options.Find()
-	findOptions.SetSort(bson.D{{"createdAt", -1}})
-	findOptions.SetLimit(limit)
-	findOptions.SetSkip((page - 1) * limit)
+	findOptions.SetSort(bson.D{{Key: "createdAt", Value: -1}}) // Sort by newest first
+	findOptions.SetLimit(limit)                                // Apply limit (20)
+	findOptions.SetSkip((page - 1) * limit)                    // Apply pagination skip
+	// FIX END
 
 	cursor, err := collection.Find(ctx, queryHandler, findOptions)
 	if err != nil {
@@ -229,6 +234,7 @@ func GetConversationBetweenTwoUsers(toUser, fromUser string, page int64) []Messa
 		}
 	}
 
+	// Reverse the order so the frontend receives them chronologically (oldest -> newest)
 	for i, j := 0, len(conversation)-1; i < j; i, j = i+1, j-1 {
 		conversation[i], conversation[j] = conversation[j], conversation[i]
 	}
