@@ -31,7 +31,8 @@ export function useVideoSocket(
     isGroup: boolean,
     onOffer?: (peerId: string, offer: RTCSessionDescriptionInit) => void,
     onAnswer?: (peerId: string, answer: RTCSessionDescriptionInit) => void,
-    onICECandidate?: (peerId: string, candidate: RTCIceCandidateInit) => void
+    onICECandidate?: (peerId: string, candidate: RTCIceCandidateInit) => void,
+    onNewPeer?: (peerId: string) => void // New callback for initiating connections
 ): UseVideoSocketReturn {
     const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
     const [participants, setParticipants] = useState<Participant[]>([]);
@@ -50,6 +51,7 @@ export function useVideoSocket(
             setConnectionStatus('connected');
 
             // Request offers from existing peers if this is a group call
+            // This tells existing participants "I am new, please call me"
             if (isGroup) {
                 ws.send(JSON.stringify({
                     type: 'request-offer',
@@ -87,53 +89,63 @@ export function useVideoSocket(
     }, [roomId, userId, isGroup]);
 
     const handleSignalMessage = useCallback((message: SignalMessage) => {
+        // Ignore messages sent by ourselves
+        if (message.userId === userId) return;
+
         switch (message.type) {
             case 'user-joined':
-                // New user joined the call
-                setParticipants(prev => [
-                    ...prev,
-                    { userId: message.userId, joinedAt: Date.now() }
-                ]);
+                // Update participants list UI
+                setParticipants(prev => {
+                    if (prev.some(p => p.userId === message.userId)) return prev;
+                    return [...prev, { userId: message.userId, joinedAt: Date.now() }];
+                });
                 console.log('User joined:', message.userId);
                 break;
 
             case 'user-left':
-                // User left the call
+                // Remove from participants list UI
                 setParticipants(prev => prev.filter(p => p.userId !== message.userId));
                 console.log('User left:', message.userId);
                 break;
 
             case 'offer':
-                // Received an offer from a peer
+                // Received an offer from a peer -> Trigger onOffer to create Answer
                 if (message.sdp && onOffer) {
                     onOffer(message.userId, message.sdp);
                 }
                 break;
 
             case 'answer':
-                // Received an answer from a peer
+                // Received an answer from a peer -> Trigger onAnswer to set Remote Description
                 if (message.sdp && onAnswer) {
                     onAnswer(message.userId, message.sdp);
                 }
                 break;
 
             case 'ice-candidate':
-                // Received an ICE candidate from a peer
+                // Received an ICE candidate from a peer -> Trigger onICECandidate to add candidate
                 if (message.ice && onICECandidate) {
                     onICECandidate(message.userId, message.ice);
                 }
                 break;
 
             case 'new-peer':
-                // Server is telling us to send an offer to a new peer
-                // This is handled by the VideoCall component
-                console.log('New peer joined, should send offer to:', message.targetId);
+                // Server telling us a new peer joined and wants US to initiate the connection.
+                // Trigger onNewPeer to create Offer
+                if (onNewPeer && message.userId) {
+                    console.log('New peer joined, initiating connection to:', message.userId);
+                    onNewPeer(message.userId);
+                } else if (message.targetId === userId && onNewPeer) {
+                    // Alternate payload format: "userId" is the sender (the new peer)
+                    console.log('New peer joined (target matched), initiating connection to:', message.userId);
+                    onNewPeer(message.userId);
+                }
                 break;
 
             default:
                 console.log('Unknown signal message type:', message.type);
         }
-    }, [onOffer, onAnswer, onICECandidate]);
+    }, [userId, onOffer, onAnswer, onICECandidate, onNewPeer]);
 
     // Send offer to a specific peer
     const sendOffer = useCallback((targetId: string, offer: RTCSessionDescriptionInit) => {
