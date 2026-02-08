@@ -19,7 +19,7 @@ import (
 func RenderHome() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, APIResponse{
-			Code:     http.StatusOK,
+			Code:     http.StatusOK,``
 			Status:   http.StatusText(http.StatusOK),
 			Message:  constants.APIWelcomeMessage,
 			Response: nil,
@@ -451,4 +451,36 @@ func isRandomChat(userID string) bool {
     // Since random chat matches assign a real partner ID, 
     // this safeguards the initial join request or specific logic.
     return userID == "random"
+}
+
+func RegisterGroupRoutes(router *gin.Engine) {
+	// Group Management
+	groupRoutes := router.Group("/api/groups")
+	{
+		// Create a new group
+		groupRoutes.POST("/create", handlers.CreateGroup())
+
+		// Get all groups for a user
+		groupRoutes.GET("/user/:userID", handlers.GetUserGroups())
+
+		// Get group details
+		groupRoutes.GET("/:groupID", handlers.GetGroupDetails())
+
+		// Member management
+		groupRoutes.POST("/members/add", handlers.AddGroupMember())
+		groupRoutes.DELETE("/:groupID/members/:userID", handlers.RemoveGroupMember())
+
+		// Update group settings
+		groupRoutes.PUT("/update", handlers.UpdateGroupSettings())
+
+		// Delete group
+		groupRoutes.DELETE("/:groupID", handlers.DeleteGroup())
+
+		// Group messages
+		groupRoutes.GET("/:groupID/messages", handlers.GetGroupMessages())
+		groupRoutes.POST("/messages/send", handlers.SendGroupMessage())
+
+		// Video calling
+		groupRoutes.POST("/video-call/start", handlers.StartGroupVideoCall())
+	}
 }

@@ -15,11 +15,9 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// ... [Existing User/Message Functions: UpdateUserOnlineStatusByUserID, GetUserByUsername, etc. STAY THE SAME] ...
-
-func UpdateUserOnlineStatusByUserID(userId, status string) error{
+func UpdateUserOnlineStatusByUserID(userId, status string) error {
 	docID, err := primitive.ObjectIDFromHex(userId)
-	if err != nil{
+	if err != nil {
 		return errors.New("unable to extract Id from Hex Id")
 	}
 
@@ -27,33 +25,33 @@ func UpdateUserOnlineStatusByUserID(userId, status string) error{
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err = collection.UpdateOne(ctx, 
-	bson.M{"_id": docID},
-	bson.M{"$set": bson.M{"online": status}},
+	_, err = collection.UpdateOne(ctx,
+		bson.M{"_id": docID},
+		bson.M{"$set": bson.M{"online": status}},
 	)
-	
-	if err != nil{
+
+	if err != nil {
 		return errors.New(constants.ServerFailedResponse)
 	}
 	return nil
 }
 
-func GetUserByUsername(username string) UserDetails{
+func GetUserByUsername(username string) UserDetails {
 	var userDetails UserDetails
 	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("users")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_ = collection.FindOne(ctx, bson.M{"username": username,}).Decode(&userDetails)
+	_ = collection.FindOne(ctx, bson.M{"username": username}).Decode(&userDetails)
 
 	return userDetails
 }
 
-func GetUserByUserID(userID string) UserDetails{
+func GetUserByUserID(userID string) UserDetails {
 	var userDetails UserDetails
 
 	docID, err := primitive.ObjectIDFromHex(userID)
-	if err != nil{
+	if err != nil {
 		return UserDetails{}
 	}
 
@@ -63,69 +61,69 @@ func GetUserByUserID(userID string) UserDetails{
 	_ = collection.FindOne(ctx, bson.M{
 		"_id": docID,
 	}).Decode(&userDetails)
-	
+
 	cancel()
-	return	userDetails
+	return userDetails
 }
 
-func IsUsernameAvailableQueryHandler(username string) bool{
+func IsUsernameAvailableQueryHandler(username string) bool {
 	userDetails := GetUserByUsername(username)
 	return userDetails == (UserDetails{})
 }
 
-func LoginQueryHandler(userDetailsRequest LoginRequest) (UserResponse, error){
+func LoginQueryHandler(userDetailsRequest LoginRequest) (UserResponse, error) {
 	if userDetailsRequest.Username == "" {
 		return UserResponse{}, errors.New(constants.UsernameCantBeEmpty)
 	} else if userDetailsRequest.Password == "" {
 		return UserResponse{}, errors.New(constants.PasswordCantBeEmpty)
-	} else{
+	} else {
 		userDetails := GetUserByUsername(userDetailsRequest.Username)
-		if userDetails == (UserDetails{}){
+		if userDetails == (UserDetails{}) {
 			return UserResponse{}, errors.New(constants.UserIsNotRegisteredWithUs)
 		}
 
-		if passErr := utils.VerifyPassword(userDetails.Password, userDetailsRequest.Password); passErr != nil{
+		if passErr := utils.VerifyPassword(userDetails.Password, userDetailsRequest.Password); passErr != nil {
 			return UserResponse{}, errors.New(constants.LoginPasswordIsInCorrect)
 		}
 
-		if onlineStatusErr := UpdateUserOnlineStatusByUserID(userDetails.ID, "Y"); onlineStatusErr != nil{
+		if onlineStatusErr := UpdateUserOnlineStatusByUserID(userDetails.ID, "Y"); onlineStatusErr != nil {
 			return UserResponse{}, errors.New(constants.LoginPasswordIsInCorrect)
 		}
 
-		return	UserResponse{
+		return UserResponse{
 			Username: userDetails.Username,
-			UserID: userDetails.ID,
+			UserID:   userDetails.ID,
 		}, nil
 	}
 }
 
-func RegisterQueryHandler(userDetails RegistrationRequest) (string, error){
-	if userDetails.Username == ""{
+func RegisterQueryHandler(userDetails RegistrationRequest) (string, error) {
+	if userDetails.Username == "" {
 		return "", errors.New(constants.UsernameCantBeEmpty)
-	}else if userDetails.Password == ""{
+	} else if userDetails.Password == "" {
 		return "", errors.New(constants.PasswordCantBeEmpty)
-	}else{
+	} else {
 		newPasswordHash, PassErr := utils.HashPassword(userDetails.Password)
-		if PassErr != nil{
+		if PassErr != nil {
 			return "", errors.New(constants.ServerFailedResponse)
 		}
 
 		collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("users")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		
+
 		id := primitive.NewObjectID()
 		uid := id.Hex()
 
 		_, registrationErr := collection.InsertOne(ctx, bson.M{
-			"_id": id,
-			"username": userDetails.Username,
-			"password": newPasswordHash,
-			"online": "N",
+			"_id":       id,
+			"username":  userDetails.Username,
+			"password":  newPasswordHash,
+			"online":    "N",
 			"createdAt": time.Now(),
 		})
 
-		if registrationErr != nil{
+		if registrationErr != nil {
 			return "", errors.New(constants.ServerFailedResponse)
 		}
 
@@ -136,11 +134,11 @@ func RegisterQueryHandler(userDetails RegistrationRequest) (string, error){
 	}
 }
 
-func GetAllOnlineUsers(userID string) []UserResponse{
+func GetAllOnlineUsers(userID string) []UserResponse {
 	var onlineUsers []UserResponse
 
 	docID, err := primitive.ObjectIDFromHex(userID)
-	if err != nil{
+	if err != nil {
 		return onlineUsers
 	}
 
@@ -148,10 +146,10 @@ func GetAllOnlineUsers(userID string) []UserResponse{
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cursor, queryError:= collection.Find(ctx, bson.M{
+	cursor, queryError := collection.Find(ctx, bson.M{
 		"online": "Y",
 		"_id": bson.M{
-			"$ne": docID,	// excludes the user itself
+			"$ne": docID, // excludes the user itself
 		},
 	})
 	defer cursor.Close(ctx)
@@ -164,11 +162,11 @@ func GetAllOnlineUsers(userID string) []UserResponse{
 		var user UserDetails
 		err := cursor.Decode(&user)
 
-		if err == nil{
+		if err == nil {
 			onlineUsers = append(onlineUsers, UserResponse{
-				UserID: user.ID,
+				UserID:   user.ID,
 				Username: user.Username,
-				Online: user.Online,
+				Online:   user.Online,
 			})
 		}
 	}
@@ -176,7 +174,7 @@ func GetAllOnlineUsers(userID string) []UserResponse{
 	return onlineUsers
 }
 
-func StoreNewMessages(message MessagePayload) bool{
+func StoreNewMessages(message MessagePayload) bool {
 	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("messages")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -192,7 +190,7 @@ func StoreNewMessages(message MessagePayload) bool{
 	return registrationError == nil
 }
 
-func GetConversationBetweenTwoUsers(toUser, fromUser string, page int64) []Message{
+func GetConversationBetweenTwoUsers(toUser, fromUser string, page int64) []Message {
 	var conversation []Message
 	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("messages")
 	var limit int64 = 20
@@ -203,12 +201,12 @@ func GetConversationBetweenTwoUsers(toUser, fromUser string, page int64) []Messa
 	queryHandler := bson.M{
 		"$or": []bson.M{
 			{
-				"toUserID": toUser,
+				"toUserID":   toUser,
 				"fromUserID": fromUser,
 			},
 			{
 				"fromUserID": toUser,
-				"toUserID": fromUser,
+				"toUserID":   fromUser,
 			},
 		},
 	}
@@ -216,17 +214,17 @@ func GetConversationBetweenTwoUsers(toUser, fromUser string, page int64) []Messa
 	findOptions := options.Find()
 	findOptions.SetSort(bson.D{{"createdAt", -1}})
 	findOptions.SetLimit(limit)
-	findOptions.SetSkip((page-1)*limit)
+	findOptions.SetSkip((page - 1) * limit)
 
 	cursor, err := collection.Find(ctx, queryHandler, findOptions)
-	if err != nil{
+	if err != nil {
 		return conversation
 	}
 	defer cursor.Close(ctx)
 
-	for cursor.Next(ctx){
+	for cursor.Next(ctx) {
 		var message Message
-		if err := cursor.Decode(&message); err == nil{
+		if err := cursor.Decode(&message); err == nil {
 			conversation = append(conversation, message)
 		}
 	}
@@ -274,9 +272,9 @@ func AcceptFriendRequest(requesterID, addresseeID string) error {
 
 	_, err := collection.UpdateOne(ctx,
 		bson.M{
-			"requesterID": requesterID, 
+			"requesterID": requesterID,
 			"addresseeID": addresseeID,
-			"status": "pending",
+			"status":      "pending",
 		},
 		bson.M{"$set": bson.M{"status": "accepted"}},
 	)
@@ -355,25 +353,25 @@ func GetFriendList(userID string) ([]UserResponse, error) {
 }
 
 func DeleteMessages(messageIDs []string, userID string) error {
-    // Convert string IDs to ObjectIDs
-    var objectIDs []primitive.ObjectID
-    for _, id := range messageIDs {
-        oid, _ := primitive.ObjectIDFromHex(id)
-        objectIDs = append(objectIDs, oid)
-    }
+	// Convert string IDs to ObjectIDs
+	var objectIDs []primitive.ObjectID
+	for _, id := range messageIDs {
+		oid, _ := primitive.ObjectIDFromHex(id)
+		objectIDs = append(objectIDs, oid)
+	}
 
-    collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("messages")
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-    defer cancel()
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("messages")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-    // Delete messages where ID matches AND (fromUserID == userID OR toUserID == userID)
-    // This allows deleting messages you sent OR received (WhatsApp style "Delete for me" logic is complex, this is "Delete" logic)
-    _, err := collection.DeleteMany(ctx, bson.M{
-        "_id": bson.M{"$in": objectIDs},
-        "$or": []bson.M{
-            {"fromUserID": userID},
-            // {"toUserID": userID}, // Uncomment to allow deleting received messages too
-        },
-    })
-    return err
+	// Delete messages where ID matches AND (fromUserID == userID OR toUserID == userID)
+	// This allows deleting messages you sent OR received (WhatsApp style "Delete for me" logic is complex, this is "Delete" logic)
+	_, err := collection.DeleteMany(ctx, bson.M{
+		"_id": bson.M{"$in": objectIDs},
+		"$or": []bson.M{
+			{"fromUserID": userID},
+			// {"toUserID": userID}, // Uncomment to allow deleting received messages too
+		},
+	})
+	return err
 }

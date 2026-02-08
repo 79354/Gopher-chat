@@ -1,0 +1,283 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+
+interface UseWebRTCReturn {
+    localStream: MediaStream | null;
+    remoteStreams: Map<string, MediaStream>;
+    isAudioMuted: boolean;
+    isVideoMuted: boolean;
+    isScreenSharing: boolean;
+    toggleAudio: () => void;
+    toggleVideo: () => void;
+    startScreenShare: () => void;
+    stopScreenShare: () => void;
+    createOffer: (peerId: string) => Promise<RTCSessionDescriptionInit | null>;
+    createAnswer: (peerId: string, offer: RTCSessionDescriptionInit) => Promise<RTCSessionDescriptionInit | null>;
+    handleRemoteOffer: (peerId: string, offer: RTCSessionDescriptionInit) => Promise<void>;
+    handleRemoteAnswer: (peerId: string, answer: RTCSessionDescriptionInit) => Promise<void>;
+    handleICECandidate: (peerId: string, candidate: RTCIceCandidateInit) => Promise<void>;
+}
+
+const ICE_SERVERS: RTCConfiguration = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        // TODO: Add TURN servers for better connectivity
+    ]
+};
+
+export function useWebRTC(roomId: string, userId: string): UseWebRTCReturn {
+    const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+    const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
+    const [isAudioMuted, setIsAudioMuted] = useState(false);
+    const [isVideoMuted, setIsVideoMuted] = useState(false);
+    const [isScreenSharing, setIsScreenSharing] = useState(false);
+
+    // Store peer connections: peerId -> RTCPeerConnection
+    const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
+    const screenStream = useRef<MediaStream | null>(null);
+
+    // Initialize local media stream
+    useEffect(() => {
+        const initializeMedia = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    },
+                    video: {
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                        frameRate: { ideal: 30 }
+                    }
+                });
+
+                setLocalStream(stream);
+            } catch (error) {
+                console.error('Error accessing media devices:', error);
+                // TODO: Show user-friendly error message
+            }
+        };
+
+        initializeMedia();
+
+        return () => {
+            // Cleanup
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            if (screenStream.current) {
+                screenStream.current.getTracks().forEach(track => track.stop());
+            }
+            peerConnections.current.forEach(pc => pc.close());
+        };
+    }, []);
+
+    // Create or get peer connection for a specific peer
+    const getOrCreatePeerConnection = useCallback((peerId: string): RTCPeerConnection => {
+        if (peerConnections.current.has(peerId)) {
+            return peerConnections.current.get(peerId)!;
+        }
+
+        const pc = new RTCPeerConnection(ICE_SERVERS);
+
+        // Add local stream tracks to peer connection
+        if (localStream) {
+            localStream.getTracks().forEach(track => {
+                pc.addTrack(track, localStream);
+            });
+        }
+
+        // Handle incoming tracks from remote peer
+        pc.ontrack = (event) => {
+            console.log('Received remote track from', peerId);
+            const [remoteStream] = event.streams;
+
+            setRemoteStreams(prev => {
+                const newMap = new Map(prev);
+                newMap.set(peerId, remoteStream);
+                return newMap;
+            });
+        };
+
+        // Handle ICE candidates
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                // TODO: Send ICE candidate to peer via signaling server
+                console.log('New ICE candidate for', peerId, event.candidate);
+            }
+        };
+
+        // Handle connection state changes
+        pc.onconnectionstatechange = () => {
+            console.log('Connection state for', peerId, ':', pc.connectionState);
+
+            if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+                // TODO: Handle reconnection or cleanup
+            }
+        };
+
+        peerConnections.current.set(peerId, pc);
+        return pc;
+    }, [localStream]);
+
+    // Create an offer for a peer
+    const createOffer = useCallback(async (peerId: string): Promise<RTCSessionDescriptionInit | null> => {
+        try {
+            const pc = getOrCreatePeerConnection(peerId);
+            const offer = await pc.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: true
+            });
+
+            await pc.setLocalDescription(offer);
+            return offer;
+        } catch (error) {
+            console.error('Error creating offer:', error);
+            return null;
+        }
+    }, [getOrCreatePeerConnection]);
+
+    // Create an answer for a peer
+    const createAnswer = useCallback(async (
+        peerId: string,
+        offer: RTCSessionDescriptionInit
+    ): Promise<RTCSessionDescriptionInit | null> => {
+        try {
+            const pc = getOrCreatePeerConnection(peerId);
+            await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            return answer;
+        } catch (error) {
+            console.error('Error creating answer:', error);
+            return null;
+        }
+    }, [getOrCreatePeerConnection]);
+
+    // Handle remote offer
+    const handleRemoteOffer = useCallback(async (
+        peerId: string,
+        offer: RTCSessionDescriptionInit
+    ): Promise<void> => {
+        const pc = getOrCreatePeerConnection(peerId);
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    }, [getOrCreatePeerConnection]);
+
+    // Handle remote answer
+    const handleRemoteAnswer = useCallback(async (
+        peerId: string,
+        answer: RTCSessionDescriptionInit
+    ): Promise<void> => {
+        const pc = peerConnections.current.get(peerId);
+        if (pc) {
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+    }, []);
+
+    // Handle ICE candidate
+    const handleICECandidate = useCallback(async (
+        peerId: string,
+        candidate: RTCIceCandidateInit
+    ): Promise<void> => {
+        const pc = peerConnections.current.get(peerId);
+        if (pc) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+    }, []);
+
+    // Toggle audio
+    const toggleAudio = useCallback(() => {
+        if (localStream) {
+            const audioTrack = localStream.getAudioTracks()[0];
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                setIsAudioMuted(!audioTrack.enabled);
+            }
+        }
+    }, [localStream]);
+
+    // Toggle video
+    const toggleVideo = useCallback(() => {
+        if (localStream) {
+            const videoTrack = localStream.getVideoTracks()[0];
+            if (videoTrack) {
+                videoTrack.enabled = !videoTrack.enabled;
+                setIsVideoMuted(!videoTrack.enabled);
+            }
+        }
+    }, [localStream]);
+
+    // Start screen share
+    const startScreenShare = useCallback(async () => {
+        try {
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+                video: {
+                    cursor: 'always'
+                },
+                audio: false
+            });
+
+            screenStream.current = stream;
+
+            // Replace video track in all peer connections
+            const videoTrack = stream.getVideoTracks()[0];
+            peerConnections.current.forEach(pc => {
+                const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+                if (sender) {
+                    sender.replaceTrack(videoTrack);
+                }
+            });
+
+            // Handle screen share stop (user clicks browser's stop sharing button)
+            videoTrack.onended = () => {
+                stopScreenShare();
+            };
+
+            setIsScreenSharing(true);
+        } catch (error) {
+            console.error('Error starting screen share:', error);
+        }
+    }, []);
+
+    // Stop screen share
+    const stopScreenShare = useCallback(() => {
+        if (screenStream.current) {
+            screenStream.current.getTracks().forEach(track => track.stop());
+            screenStream.current = null;
+        }
+
+        // Revert to camera feed
+        if (localStream) {
+            const videoTrack = localStream.getVideoTracks()[0];
+            peerConnections.current.forEach(pc => {
+                const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+                if (sender && videoTrack) {
+                    sender.replaceTrack(videoTrack);
+                }
+            });
+        }
+
+        setIsScreenSharing(false);
+    }, [localStream]);
+
+    return {
+        localStream,
+        remoteStreams,
+        isAudioMuted,
+        isVideoMuted,
+        isScreenSharing,
+        toggleAudio,
+        toggleVideo,
+        startScreenShare,
+        stopScreenShare,
+        createOffer,
+        createAnswer,
+        handleRemoteOffer,
+        handleRemoteAnswer,
+        handleICECandidate
+    };
+}
