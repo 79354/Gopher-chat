@@ -5,8 +5,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useChatStore, Message } from '@/store/chatStore';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { api } from '@/lib/api';
+import { videoApi } from '@/lib/videoApi'; // Import video API
 import { GopherLogo, SleepingGopher, DiggingGopher, PeekingGopher } from '@/components/GopherLogo';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
+import VideoCall from '@/components/VideoCall'; // Import VideoCall component
 import {
   Send,
   Paperclip,
@@ -24,7 +26,8 @@ import {
   Search,
   Globe,
   Bell,
-  Shuffle
+  Shuffle,
+  PhoneIncoming // Added icon
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -38,6 +41,9 @@ export default function ChatInterface() {
   const [friendSearchQuery, setFriendSearchQuery] = useState('');
   const [searchResult, setSearchResult] = useState<any>(null);
   const [searching, setSearching] = useState(false);
+
+  // Video Call State
+  const [activeCall, setActiveCall] = useState<{ roomId: string; isGroup: boolean } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -65,8 +71,6 @@ export default function ChatInterface() {
   const { sendMessage, sendTyping } = useWebSocket(currentUser?.userID || null);
 
   // --- Filtered Lists ---
-
-  // 1. Create a Set of Online IDs for O(1) lookup and type safety
   const onlineIDs = new Set(onlineUsers.map(u => String(u.userID)));
   const onlineFriends = friends.filter(friend => onlineIDs.has(String(friend.userID)));
   const offlineFriends = friends.filter(friend => !onlineIDs.has(String(friend.userID)));
@@ -124,13 +128,12 @@ export default function ChatInterface() {
     if (currentUser) {
       api.getPendingRequests(currentUser.userID).then(setPendingRequests);
     }
-  }, [currentUser, showNotifications]); // Refresh when modal opens
+  }, [currentUser, showNotifications]);
 
   const handleAcceptRequest = async (requesterID: string) => {
     if (!currentUser) return;
     const success = await api.acceptFriendRequest(requesterID);
     if (success) {
-      // Remove from list and refresh friends
       setPendingRequests(prev => prev.filter(req => req.id !== requesterID));
       const updatedFriends = await api.getFriends(currentUser.userID);
       setFriends(updatedFriends);
@@ -141,7 +144,6 @@ export default function ChatInterface() {
   // --- Friend Search Handler ---
   const handleSearchFriend = async () => {
     if (!friendSearchQuery.trim()) return;
-
     setSearching(true);
     setSearchResult(null);
 
@@ -162,7 +164,6 @@ export default function ChatInterface() {
 
   const handleSendFriendRequest = async () => {
     if (!currentUser || !searchResult?.found) return;
-
     try {
       const success = await api.sendFriendRequest(searchResult.username);
       if (success) {
@@ -181,10 +182,8 @@ export default function ChatInterface() {
   // --- Message Handlers ---
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setMessageInput(e.target.value);
-
     if (activeChat) {
       sendTyping(activeChat.userID, true);
-
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => {
         sendTyping(activeChat.userID, false);
@@ -195,13 +194,10 @@ export default function ChatInterface() {
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!messageInput.trim() || !activeChat) return;
-
     // @ts-ignore
     sendMessage(activeChat.userID, messageInput, 'text');
-
     setMessageInput('');
     setShowEmojiPicker(false);
-
     sendTyping(activeChat.userID, false);
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
   };
@@ -223,12 +219,38 @@ export default function ChatInterface() {
     }
   };
 
+  // --- Video Call Logic ---
+  const handleStartCall = async () => {
+    if (!currentUser || !activeChat) return;
+
+    try {
+      // 1. Create a room
+      const room = await videoApi.createRoom({
+        creatorId: currentUser.userID,
+        type: 'peer'
+      });
+
+      // 2. Send invitation message
+      // @ts-ignore
+      sendMessage(activeChat.userID, room.roomId, 'call-invite');
+
+      // 3. Join the room locally
+      setActiveCall({ roomId: room.roomId, isGroup: false });
+
+    } catch (error) {
+      console.error("Failed to start call:", error);
+      alert("Could not start video call");
+    }
+  };
+
+  const handleJoinCall = (roomId: string) => {
+    setActiveCall({ roomId, isGroup: false });
+  };
+
   const currentMessages = activeChat ? messages[activeChat.userID] || [] : [];
   const isRecipientTyping = activeChat ? typingUsers[activeChat.userID] : false;
 
   const handleGlobalChat = () => {
-    // For now, let's treat Global Chat as a special "user"
-    // Note: Backend needs to support "global" ID or we create a dummy user
     setActiveChat({
       userID: "global",
       username: "Global Chat",
@@ -261,6 +283,17 @@ export default function ChatInterface() {
         className="hidden"
       />
 
+      {/* Video Call Modal */}
+      {activeCall && currentUser && activeChat && (
+        <VideoCall
+          roomId={activeCall.roomId}
+          userId={currentUser.userID}
+          username={currentUser.username}
+          isGroup={activeCall.isGroup}
+          onClose={() => setActiveCall(null)}
+        />
+      )}
+
       {/* ========== SIDEBAR ========== */}
       <motion.aside
         initial={{ x: -300 }}
@@ -275,7 +308,6 @@ export default function ChatInterface() {
           </div>
 
           <div className="flex gap-2">
-            {/* Inbox Button */}
             <button
               onClick={() => setShowNotifications(true)}
               className="relative p-2 hover:bg-white/10 rounded-full text-gopher-blue transition-colors"
@@ -286,7 +318,6 @@ export default function ChatInterface() {
               )}
             </button>
 
-            {/* Existing Find Friend Button */}
             <button
               onClick={() => setShowFriendModal(true)}
               className="p-2 hover:bg-white/10 rounded-full text-gopher-blue transition-colors"
@@ -311,7 +342,6 @@ export default function ChatInterface() {
             </div>
           </button>
 
-          {/* Random Chat Button */}
           <button
             onClick={handleRandomChat}
             className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 text-gray-300 hover:text-white transition-all"
@@ -328,10 +358,8 @@ export default function ChatInterface() {
 
         <div className="h-px bg-white/10 mx-6 my-2" />
 
-        {/* Friends List - ONLY SHOW ONLINE FRIENDS */}
+        {/* Friends List */}
         <div className="flex-1 overflow-y-auto px-4 custom-scrollbar">
-
-          {/* ONLINE FRIENDS */}
           {onlineFriends.length > 0 && (
             <div className="mb-4">
               <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 px-2">Online — {onlineFriends.length}</h3>
@@ -358,7 +386,6 @@ export default function ChatInterface() {
             </div>
           )}
 
-          {/* OFFLINE FRIENDS */}
           {offlineFriends.length > 0 && (
             <div>
               <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 px-2">Offline — {offlineFriends.length}</h3>
@@ -456,7 +483,10 @@ export default function ChatInterface() {
                 <button className="p-2 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors">
                   <Phone className="w-5 h-5" />
                 </button>
-                <button className="p-2 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors">
+                <button
+                  onClick={handleStartCall}
+                  className="p-2 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors"
+                >
                   <Video className="w-5 h-5" />
                 </button>
                 <div className="w-px h-6 bg-white/10 mx-2" />
@@ -499,6 +529,36 @@ export default function ChatInterface() {
                       const isGrouped = prevMsg &&
                         prevMsg.fromUserID === msg.fromUserID &&
                         (msg.timestamp - prevMsg.timestamp < 5 * 60 * 1000);
+
+                      // Custom Render for Call Invites
+                      if (msg.type === 'call-invite') {
+                        return (
+                          <motion.div
+                            key={msg.id || msg.tempId || index}
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="flex justify-center my-4"
+                          >
+                            <div className="bg-white/5 border border-white/10 p-4 rounded-xl flex items-center gap-4 max-w-sm">
+                              <div className="p-3 bg-gopher-blue/20 rounded-full text-gopher-blue">
+                                <PhoneIncoming />
+                              </div>
+                              <div className="flex-1">
+                                <p className="text-white font-medium">
+                                  {isMe ? 'You started a call' : 'Incoming Video Call'}
+                                </p>
+                                <p className="text-xs text-gray-400">Tap to join the room</p>
+                              </div>
+                              <button
+                                onClick={() => handleJoinCall(msg.message)}
+                                className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+                              >
+                                Join
+                              </button>
+                            </div>
+                          </motion.div>
+                        );
+                      }
 
                       return (
                         <motion.div
