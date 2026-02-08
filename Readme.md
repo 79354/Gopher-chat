@@ -38,7 +38,7 @@ GopherChat is a modern communication platform designed for scalability and low l
 
 ---
 ## Architecture
-https://github.com/79354/Gopher-chat/blob/main/ARCHITECTURE.md
+![GopherChat Architecture](architecture.png)
 ---
 
 ## 🏁 Quick Start
