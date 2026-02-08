@@ -1,4 +1,4 @@
-# GopherChat ![alt text](image.png)
+# GopherChat <img src="image.png" alt="logo" height="40">
 
 > A high-performance, real-time messaging and video calling platform built with Go, Fiber, Gin, WebSocket, WebRTC, and Next.js.
 
@@ -34,6 +34,11 @@ GopherChat is a modern communication platform designed for scalability and low l
 | **Database**     | MongoDB                 | Persistent storage for users, messages, and groups       |
 | **Cache/PubSub** | Redis                   | Real-time presence, signaling sync, and session management|
 
+---
+
+---
+## Architecture
+https://github.com/79354/Gopher-chat/blob/main/ARCHITECTURE.md
 ---
 
 ## 🏁 Quick Start
@@ -168,6 +173,7 @@ GopherChat/
 ├── docker-compose.yml            # Orchestration for All Services
 ├── Makefile                      # Shortcuts (make up, make logs)
 └── README.md                     # Documentation
+```
 
 ---
 
