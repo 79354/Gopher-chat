@@ -333,26 +333,6 @@ func InitiateGroupVideoCall(groupID, callerID string) (string, error) {
 	return "room_" + groupID, nil
 }
 
-// BroadcastGroupMessage and NotifyGroupCall are placeholders
-// Real implementation would use the Redis Adapter from handlers
-func BroadcastGroupMessage(groupID, fromUserID, message string) {
-	// This logic is actually handled in server.go via HandleGroupMessageEvent
-	// We leave this empty or remove it if handled centrally
-}
-
-func NotifyGroupCall(groupID, callerID, roomID string) {
-	// Trigger a notification via Redis PubSub
-	caller := GetUserByUserID(callerID)
-
-	// Create a system message in the group
-	StoreGroupMessage(GroupMessageRequest{
-		GroupID:    groupID,
-		FromUserID: "system",
-		Message:    caller.Username + " started a video call",
-		Type:       "call-invite",
-	})
-}
-
 // BroadcastQueue is a channel to send messages from HTTP handlers to the WebSocket Hub.
 // The main server.go will listen to this channel.
 var BroadcastQueue = make(chan WSMessage, 1000)

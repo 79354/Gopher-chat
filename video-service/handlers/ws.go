@@ -24,6 +24,7 @@ func (p *Peer) WriteJSON(v interface{}) error {
 
 var (
 	// In-memory connection pool (room -> user -> Peer)
+	// These are package-private but accessible to room.go
 	rooms      = make(map[string]map[string]*Peer)
 	roomsMutex = &sync.RWMutex{}
 )
@@ -172,15 +173,4 @@ func broadcastToRoom(roomId, excludeUserId string, msg models.SignalMessage) {
 			}
 		}(peer)
 	}
-}
-
-// GetRoomParticipants returns list of users currently in a room
-func GetRoomParticipants(c *websocket.Conn) error {
-	// Note: This function signature in the original file seemed to be a mix
-	// of Fiber context and Websocket. Assuming this is a standard Fiber Handler
-	// logic mapped incorrectly in the previous file.
-	// Since this file is `handlers/ws.go`, we keep the helper functions here
-	// but the Route definition in main.go likely expects a *fiber.Ctx handler.
-	// We will assume this is just helper logic or unused for now.
-	return nil
 }
