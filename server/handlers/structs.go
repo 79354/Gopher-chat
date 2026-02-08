@@ -25,6 +25,15 @@ type Message struct {
 	CreatedAt  time.Time `json:"createdAt,omitempty" bson:"createdAt,omitempty"`
 }
 
+// GroupMessagePayload is used for broadcasting group messages via WebSocket/Redis
+type GroupMessagePayload struct {
+	GroupID    string    `json:"groupID"`
+	FromUserID string    `json:"fromUserID"`
+	Message    string    `json:"message"`
+	Type       string    `json:"type"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
 // NEW: Friend System Structs
 type Friendship struct {
 	ID          string    `json:"id" bson:"_id,omitempty"`
