@@ -1,341 +1,352 @@
 package handlers
 
 import (
-	"net/http"
-	"regexp"
+	"context"
+	"errors"
+	"os"
+	"time"
 
+	"chat-app/config"
 	"chat-app/constants"
 
-	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// CreateGroup creates a new group chat
-func CreateGroup() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req CreateGroupRequest
+// CreateGroupQuery inserts a new group into MongoDB
+func CreateGroupQuery(req CreateGroupRequest) (GroupResponse, error) {
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("groups")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, APIResponse{
-				Code:    http.StatusBadRequest,
-				Message: "Invalid request payload",
-			})
-			return
-		}
+	// 1. Create initial members list (Creator is admin)
+	creatorID := req.CreatorID
+	creator := GetUserByUserID(creatorID)
 
-		// Validation
-		if req.Name == "" {
-			c.JSON(http.StatusBadRequest, APIResponse{
-				Code:    http.StatusBadRequest,
-				Message: "Group name cannot be empty",
-			})
-			return
-		}
-
-		if req.CreatorID == "" {
-			c.JSON(http.StatusBadRequest, APIResponse{
-				Code:    http.StatusBadRequest,
-				Message: "Creator ID is required",
-			})
-			return
-		}
-
-		// Create group in database
-		group, err := CreateGroupQuery(req)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Code:    http.StatusInternalServerError,
-				Message: err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, APIResponse{
-			Code:     http.StatusOK,
-			Status:   http.StatusText(http.StatusOK),
-			Message:  "Group created successfully",
-			Response: group,
-		})
+	members := []GroupMember{
+		{
+			UserID:   creatorID,
+			Username: creator.Username,
+			Role:     "admin",
+			JoinedAt: time.Now(),
+		},
 	}
+
+	// Add other invited members
+	for _, memberID := range req.MemberIDs {
+		// Avoid duplicates
+		if memberID == creatorID {
+			continue
+		}
+		user := GetUserByUserID(memberID)
+		if user.ID != "" {
+			members = append(members, GroupMember{
+				UserID:   user.ID,
+				Username: user.Username,
+				Role:     "member",
+				JoinedAt: time.Now(),
+			})
+		}
+	}
+
+	// 2. Prepare Group Document
+	newGroup := GroupDetails{
+		ID:          primitive.NewObjectID().Hex(), // Generate ID manually to return it easily
+		Name:        req.Name,
+		Description: req.Description,
+		Avatar:      req.Avatar,
+		CreatorID:   creatorID,
+		Members:     members,
+		Settings: GroupSettings{
+			IsPublic:          false,
+			AllowInvites:      true,
+			MessagesCanDelete: false,
+		},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	// Overwrite the ObjectID with the generated one
+	objID, _ := primitive.ObjectIDFromHex(newGroup.ID)
+
+	insertDoc := bson.M{
+		"_id":         objID,
+		"name":        newGroup.Name,
+		"description": newGroup.Description,
+		"avatar":      newGroup.Avatar,
+		"creatorID":   newGroup.CreatorID,
+		"members":     newGroup.Members,
+		"settings":    newGroup.Settings,
+		"createdAt":   newGroup.CreatedAt,
+		"updatedAt":   newGroup.UpdatedAt,
+	}
+
+	_, err := collection.InsertOne(ctx, insertDoc)
+	if err != nil {
+		return GroupResponse{}, errors.New(constants.ServerFailedResponse)
+	}
+
+	return GroupResponse{
+		GroupID:     newGroup.ID,
+		Name:        newGroup.Name,
+		Description: newGroup.Description,
+		Avatar:      newGroup.Avatar,
+		CreatorID:   newGroup.CreatorID,
+		MemberCount: len(newGroup.Members),
+		CreatedAt:   newGroup.CreatedAt,
+	}, nil
 }
 
-// GetUserGroups returns all groups a user is part of
-func GetUserGroups() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		userID := c.Param("userID")
+// GetGroupsByUserID fetches all groups a user belongs to
+func GetGroupsByUserID(userID string) ([]GroupResponse, error) {
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("groups")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-		isAlphaNumeric := regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$`).MatchString
-		if !isAlphaNumeric(userID) {
-			c.JSON(http.StatusBadRequest, APIResponse{
-				Code:    http.StatusBadRequest,
-				Message: "Invalid user ID",
-			})
-			return
-		}
-
-		groups, err := GetGroupsByUserID(userID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Code:    http.StatusInternalServerError,
-				Message: "Failed to fetch groups",
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, APIResponse{
-			Code:     http.StatusOK,
-			Status:   http.StatusText(http.StatusOK),
-			Message:  constants.SuccessfulResponse,
-			Response: groups,
-		})
+	// Find groups where 'members.userID' matches the input userID
+	filter := bson.M{"members.userID": userID}
+	cursor, err := collection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
 	}
+	defer cursor.Close(ctx)
+
+	var groups []GroupResponse
+	for cursor.Next(ctx) {
+		var group GroupDetails
+		if err := cursor.Decode(&group); err == nil {
+			groups = append(groups, GroupResponse{
+				GroupID:     group.ID,
+				Name:        group.Name,
+				Description: group.Description,
+				Avatar:      group.Avatar,
+				CreatorID:   group.CreatorID,
+				MemberCount: len(group.Members),
+				CreatedAt:   group.CreatedAt,
+			})
+		}
+	}
+	return groups, nil
 }
 
-// GetGroupDetails returns detailed information about a group
-func GetGroupDetails() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		groupID := c.Param("groupID")
+// GetGroupByID fetches full details of a specific group
+func GetGroupByID(groupID string) (GroupDetails, error) {
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("groups")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-		group, err := GetGroupByID(groupID)
-		if err != nil {
-			c.JSON(http.StatusNotFound, APIResponse{
-				Code:    http.StatusNotFound,
-				Message: "Group not found",
-			})
-			return
-		}
-
-		// TODO: Check if requesting user is a member
-
-		c.JSON(http.StatusOK, APIResponse{
-			Code:     http.StatusOK,
-			Status:   http.StatusText(http.StatusOK),
-			Message:  constants.SuccessfulResponse,
-			Response: group,
-		})
+	objID, err := primitive.ObjectIDFromHex(groupID)
+	if err != nil {
+		return GroupDetails{}, errors.New("invalid group ID")
 	}
+
+	var group GroupDetails
+	err = collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&group)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return GroupDetails{}, errors.New("group not found")
+		}
+		return GroupDetails{}, err
+	}
+
+	return group, nil
 }
 
-// AddGroupMember adds a new member to a group
-func AddGroupMember() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req AddMemberRequest
+// AddMemberToGroup adds a user to the group
+func AddMemberToGroup(groupID, userID, role string) error {
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("groups")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, APIResponse{
-				Code:    http.StatusBadRequest,
-				Message: "Invalid request",
-			})
-			return
-		}
-
-		// TODO: Validate permissions (only admin can add members)
-		// TODO: Check if user is already a member
-		// TODO: Send notification to added user
-
-		err := AddMemberToGroup(req.GroupID, req.UserID, "member")
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Code:    http.StatusInternalServerError,
-				Message: err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, APIResponse{
-			Code:    http.StatusOK,
-			Message: "Member added successfully",
-		})
+	objID, err := primitive.ObjectIDFromHex(groupID)
+	if err != nil {
+		return errors.New("invalid group ID")
 	}
+
+	// Check if user exists
+	user := GetUserByUserID(userID)
+	if user.ID == "" {
+		return errors.New("user not found")
+	}
+
+	// Check if already a member
+	count, _ := collection.CountDocuments(ctx, bson.M{
+		"_id":            objID,
+		"members.userID": userID,
+	})
+	if count > 0 {
+		return errors.New("user is already a member")
+	}
+
+	newMember := GroupMember{
+		UserID:   userID,
+		Username: user.Username,
+		Role:     role,
+		JoinedAt: time.Now(),
+	}
+
+	_, err = collection.UpdateOne(ctx,
+		bson.M{"_id": objID},
+		bson.M{"$push": bson.M{"members": newMember}},
+	)
+
+	return err
 }
 
-// RemoveGroupMember removes a member from a group
-func RemoveGroupMember() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		groupID := c.Param("groupID")
-		userID := c.Param("userID")
+// RemoveMemberFromGroup removes a user from the group
+func RemoveMemberFromGroup(groupID, userID string) error {
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("groups")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-		// TODO: Validate permissions (only admin or self can remove)
-		// TODO: Cannot remove group creator
-		// TODO: Notify removed user
-
-		err := RemoveMemberFromGroup(groupID, userID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Code:    http.StatusInternalServerError,
-				Message: err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, APIResponse{
-			Code:    http.StatusOK,
-			Message: "Member removed successfully",
-		})
+	objID, err := primitive.ObjectIDFromHex(groupID)
+	if err != nil {
+		return errors.New("invalid group ID")
 	}
+
+	// Don't allow removing the creator (simple logic for now)
+	// In a real app, ownership transfer logic is needed
+	var group GroupDetails
+	collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&group)
+	if group.CreatorID == userID {
+		return errors.New("cannot remove the group creator")
+	}
+
+	_, err = collection.UpdateOne(ctx,
+		bson.M{"_id": objID},
+		bson.M{"$pull": bson.M{"members": bson.M{"userID": userID}}},
+	)
+
+	return err
 }
 
-// UpdateGroupSettings updates group information
-func UpdateGroupSettings() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req UpdateGroupRequest
+// UpdateGroup modifies group details
+func UpdateGroup(req UpdateGroupRequest) error {
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("groups")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, APIResponse{
-				Code:    http.StatusBadRequest,
-				Message: "Invalid request",
-			})
-			return
-		}
-
-		// TODO: Validate permissions (only admin can update)
-
-		err := UpdateGroup(req)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Code:    http.StatusInternalServerError,
-				Message: err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, APIResponse{
-			Code:    http.StatusOK,
-			Message: "Group updated successfully",
-		})
+	objID, err := primitive.ObjectIDFromHex(req.GroupID)
+	if err != nil {
+		return errors.New("invalid group ID")
 	}
+
+	updateFields := bson.M{}
+	if req.Name != "" {
+		updateFields["name"] = req.Name
+	}
+	if req.Description != "" {
+		updateFields["description"] = req.Description
+	}
+	if req.Avatar != "" {
+		updateFields["avatar"] = req.Avatar
+	}
+	updateFields["updatedAt"] = time.Now()
+
+	_, err = collection.UpdateOne(ctx, bson.M{"_id": objID}, bson.M{"$set": updateFields})
+	return err
 }
 
-// DeleteGroup deletes a group
-func DeleteGroup() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		groupID := c.Param("groupID")
-		requesterID := c.Query("requesterID")
+// DeleteGroupByID deletes the group
+func DeleteGroupByID(groupID, requesterID string) error {
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("groups")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-		// TODO: Only creator can delete group
-		// TODO: Notify all members
-		// TODO: Archive group messages
-
-		err := DeleteGroupByID(groupID, requesterID)
-		if err != nil {
-			c.JSON(http.StatusForbidden, APIResponse{
-				Code:    http.StatusForbidden,
-				Message: err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, APIResponse{
-			Code:    http.StatusOK,
-			Message: "Group deleted successfully",
-		})
+	objID, err := primitive.ObjectIDFromHex(groupID)
+	if err != nil {
+		return errors.New("invalid group ID")
 	}
+
+	// Verify requester is creator
+	var group GroupDetails
+	err = collection.FindOne(ctx, bson.M{"_id": objID}).Decode(&group)
+	if err != nil {
+		return errors.New("group not found")
+	}
+
+	if group.CreatorID != requesterID {
+		return errors.New("only the creator can delete the group")
+	}
+
+	_, err = collection.DeleteOne(ctx, bson.M{"_id": objID})
+	return err
 }
 
-// GetGroupMessages returns message history for a group
-func GetGroupMessages() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		groupID := c.Param("groupID")
-		page := c.DefaultQuery("page", "1")
+// StoreGroupMessage saves a message to the database
+func StoreGroupMessage(req GroupMessageRequest) (string, error) {
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("group_messages")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-		// TODO: Verify user is a member
+	id := primitive.NewObjectID()
 
-		messages, err := GetGroupMessageHistory(groupID, page)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Code:    http.StatusInternalServerError,
-				Message: "Failed to fetch messages",
-			})
-			return
-		}
+	_, err := collection.InsertOne(ctx, bson.M{
+		"_id":        id,
+		"groupID":    req.GroupID,
+		"fromUserID": req.FromUserID,
+		"message":    req.Message,
+		"type":       req.Type,
+		"createdAt":  time.Now(),
+	})
 
-		c.JSON(http.StatusOK, APIResponse{
-			Code:     http.StatusOK,
-			Status:   http.StatusText(http.StatusOK),
-			Message:  constants.SuccessfulResponse,
-			Response: messages,
-		})
+	if err != nil {
+		return "", err
 	}
+
+	return id.Hex(), nil
 }
 
-// SendGroupMessage sends a message to a group
-func SendGroupMessage() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req GroupMessageRequest
+// GetGroupMessageHistory fetches messages with pagination
+func GetGroupMessageHistory(groupID string, page string) ([]GroupMessage, error) {
+	collection := config.Client.Database(os.Getenv("MONGODB_DATABASE")).Collection("group_messages")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, APIResponse{
-				Code:    http.StatusBadRequest,
-				Message: "Invalid request",
-			})
-			return
-		}
+	// Basic pagination (implement logic to convert page string to offset)
+	// For now, let's just return the last 50 messages
+	opts := options.Find().SetSort(bson.D{{"createdAt", 1}}).SetLimit(50)
 
-		// TODO: Verify user is a member
-		// TODO: Store message in database
-		// TODO: Broadcast via WebSocket to all group members
-
-		msgID, err := StoreGroupMessage(req)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Code:    http.StatusInternalServerError,
-				Message: "Failed to send message",
-			})
-			return
-		}
-
-		// Broadcast to group members via WebSocket
-		BroadcastGroupMessage(req.GroupID, req.FromUserID, req.Message)
-
-		c.JSON(http.StatusOK, APIResponse{
-			Code:     http.StatusOK,
-			Message:  "Message sent",
-			Response: map[string]string{"messageId": msgID},
-		})
+	cursor, err := collection.Find(ctx, bson.M{"groupID": groupID}, opts)
+	if err != nil {
+		return nil, err
 	}
+	defer cursor.Close(ctx)
+
+	var messages []GroupMessage
+	if err = cursor.All(ctx, &messages); err != nil {
+		return nil, err
+	}
+
+	return messages, nil
 }
 
-// StartGroupVideoCall initiates a video call for a group
-func StartGroupVideoCall() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req StartCallRequest
-
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, APIResponse{
-				Code:    http.StatusBadRequest,
-				Message: "Invalid request",
-			})
-			return
-		}
-
-		// TODO: Verify user is a member
-		// TODO: Create video room in video-service
-		// TODO: Notify all group members
-
-		roomID, err := InitiateGroupVideoCall(req.GroupID, req.CallerID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Code:    http.StatusInternalServerError,
-				Message: "Failed to start call",
-			})
-			return
-		}
-
-		// Notify group members about the call
-		NotifyGroupCall(req.GroupID, req.CallerID, roomID)
-
-		c.JSON(http.StatusOK, APIResponse{
-			Code:    http.StatusOK,
-			Message: "Video call started",
-			Response: map[string]string{
-				"roomId":  roomID,
-				"groupId": req.GroupID,
-			},
-		})
-	}
+// InitiateGroupVideoCall is a placeholder for video integration logic
+// In a real microservices arch, this might contact the video-service via HTTP
+func InitiateGroupVideoCall(groupID, callerID string) (string, error) {
+	// For now, we just generate a Room ID based on the Group ID
+	// The frontend will then connect to the video-service with this ID
+	return "room_" + groupID, nil
 }
 
-// TODO: Implement admin promotion/demotion
-// TODO: Implement mute/unmute members
-// TODO: Implement group settings (public/private)
-// TODO: Implement invite links
-// TODO: Implement group search
+// BroadcastGroupMessage and NotifyGroupCall are placeholders
+// Real implementation would use the Redis Adapter from handlers
+func BroadcastGroupMessage(groupID, fromUserID, message string) {
+	// This logic is actually handled in server.go via HandleGroupMessageEvent
+	// We leave this empty or remove it if handled centrally
+}
+
+func NotifyGroupCall(groupID, callerID, roomID string) {
+	// Trigger a notification via Redis PubSub
+	caller := GetUserByUserID(callerID)
+
+	// Create a system message in the group
+	StoreGroupMessage(GroupMessageRequest{
+		GroupID:    groupID,
+		FromUserID: "system",
+		Message:    caller.Username + " started a video call",
+		Type:       "call-invite",
+	})
+}
